@@ -22,7 +22,7 @@ function yin(buf, sr, thr = 0.15) {
 if (typeof module !== 'undefined') module.exports = { yin, noteName, freqToMidi };
 if (typeof document === 'undefined') { /* node test */ } else (function () {
 
-const S = { ctx: null, an: null, buf: null, midi: null, rms: 0, hist: [], target: 57, free: false, lastVoice: 0, silenceStart: performance.now(), tipAt: 0, listeners: [] };
+const S = { ctx: null, an: null, buf: null, midi: null, rms: 0, hist: [], target: 57, free: false, lastVoice: 0, silenceStart: performance.now(), tipAt: 0, listeners: [], toneUntil: 0, speaking: false };
 const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
 
 // UI setup
@@ -41,6 +41,7 @@ function tone(m, dur = 1) {
   const c = ensureCtx(), o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
   o.type = 'triangle'; o.frequency.value = midiToFreq(m);
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.3, t + 0.05); g.gain.setValueAtTime(0.3, t + dur - 0.15); g.gain.linearRampToValueAtTime(0, t + dur);
+  S.toneUntil = performance.now() + dur * 1000 + 100;
   o.connect(g).connect(c.destination); o.start(t); o.stop(t + dur + 0.05);
   return new Promise(r => setTimeout(r, dur * 1000));
 }
@@ -60,12 +61,14 @@ function loop() {
   S.an.getFloatTimeDomainData(S.buf);
   let s = 0; for (const x of S.buf) s += x * x; S.rms = Math.sqrt(s / S.buf.length);
   const now = performance.now(); let midi = null;
-  if (S.rms > GATE) { const r = yin(S.buf, S.ctx.sampleRate); if (r && r.clarity > 0.8 && r.freq > 60 && r.freq < 1200) midi = freqToMidi(r.freq); }
+  const busy = S.speaking || now < S.toneUntil;
+  if (!busy && S.rms > GATE) { const r = yin(S.buf, S.ctx.sampleRate); if (r && r.clarity > 0.8 && r.freq > 60 && r.freq < 1200) midi = freqToMidi(r.freq); }
   // median smoothing
   S.raw = (S.raw || []).concat([midi]).slice(-5);
   const v = S.raw.filter(x => x != null).sort((a, b) => a - b);
   S.midi = v.length >= 3 ? v[v.length >> 1] : null;
   S.hist.push({ t: now, m: S.midi, rms: S.rms }); while (S.hist.length && now - S.hist[0].t > 6000) S.hist.shift();
+  trackSegments(now);
   if (S.midi != null) { if (now - S.lastVoice > 2500) S.phraseStart = now; S.lastVoice = now; }
   S.listeners.forEach(f => f(S.midi, S.rms, now));
   render(now); requestAnimationFrame(loop);
@@ -78,7 +81,7 @@ function render(now) {
     $('noteName').textContent = noteName(n); $('freq').textContent = midiToFreq(S.midi).toFixed(1) + ' Hz';
     $('cents').textContent = (c >= 0 ? '+' : '') + c.toFixed(0) + ' cêntimos'; $('needle').style.left = (50 + c) + '%';
   }
-  if (now - S.tipAt > 1200) { S.tipAt = now; $('tip').textContent = liveTip(now); }
+  if (now - S.tipAt > 500) { S.tipAt = now; teacherTick(now); }
   drawGraph();
 }
 
@@ -125,6 +128,142 @@ function drawGraph() {
   g.stroke();
 }
 
+// ===== Professor: o que estou a ouvir + persona + voz =====
+const pick = (arr, key) => { const last = T.lastPick[key]; let opts = arr.filter(x => x !== last); if (!opts.length) opts = arr; const s = opts[Math.floor(Math.random() * opts.length)]; T.lastPick[key] = s; return s; };
+const T = { lastPick: {}, lastFocus: null, lastAt: 0, lastSpokenAt: 0, speaking: false, voice: null, goodStreak: 0, prevDiff: null, segStart: 0, gaps: [] };
+const canSpeak = 'speechSynthesis' in window;
+$('speakToggle').checked = canSpeak && store.get('canto.voz', true);
+$('speakToggle').disabled = !canSpeak;
+if (!canSpeak) $('voiceInfo').textContent = 'O teu navegador não tem síntese de voz.';
+$('speakToggle').onchange = e => { store.set('canto.voz', e.target.checked); if (!e.target.checked && canSpeak) speechSynthesis.cancel(); };
+function chooseVoice() {
+  if (!canSpeak) return;
+  const vs = speechSynthesis.getVoices();
+  T.voice = vs.find(v => /^pt[-_]PT/i.test(v.lang)) || vs.find(v => /^pt[-_]BR/i.test(v.lang)) || vs.find(v => /^pt/i.test(v.lang)) || null;
+  $('voiceInfo').textContent = T.voice ? 'Voz: ' + T.voice.name + ' (' + T.voice.lang + ')' + (/PT/i.test(T.voice.lang) ? '' : ' — não há voz pt-PT neste dispositivo') : (vs.length ? 'Sem voz portuguesa neste dispositivo; será usada a voz por defeito.' : '');
+}
+if (canSpeak) { chooseVoice(); speechSynthesis.onvoiceschanged = chooseVoice; }
+// Fala em voz alta; nunca por cima do tom guia; durante a fala a análise do micro fica em pausa.
+async function speak(text) {
+  $('teacher').textContent = text;
+  if (!canSpeak || !$('speakToggle').checked) return;
+  while (performance.now() < S.toneUntil) await sleep(100);
+  speechSynthesis.cancel();
+  T.speaking = true; S.speaking = true;
+  await new Promise(res => {
+    const u = new SpeechSynthesisUtterance(text.replace(/[^\p{L}\p{N}\s.,;:!?'’()%#-]/gu, ''));
+    u.lang = T.voice ? T.voice.lang : 'pt-PT'; if (T.voice) u.voice = T.voice; u.rate = 1.0; u.pitch = 1.0;
+    const done = () => res(); u.onend = done; u.onerror = done;
+    setTimeout(done, 15000); speechSynthesis.speak(u);
+  });
+  await sleep(250); // deixa morrer o eco antes de voltar a ouvir
+  T.speaking = false; S.speaking = false; S.raw = []; S.hist.push({ t: performance.now(), m: null, rms: 0 });
+}
+const fmtNote = m => noteName(m) + ' (' + midiToFreq(Math.round(m)).toFixed(0) + ' Hz)';
+function analyse(now) {
+  const voiced = S.hist.filter(p => p.m != null);
+  const recent = voiced.filter(p => now - p.t < 1200);
+  const silent = now - S.lastVoice;
+  const a = { silent, voiced: S.midi != null && recent.length >= 6 };
+  if (!a.voiced) return a;
+  const ms = recent.map(p => p.m), mean = ms.reduce((x, y) => x + y) / ms.length;
+  a.mean = mean; a.note = Math.round(mean);
+  a.sd = Math.sqrt(ms.reduce((x, y) => x + (y - mean) ** 2, 0) / ms.length) * 100;
+  const last = voiced.filter(p => now - p.t < 700);
+  if (last.length > 5) { const t0 = last[0].t, xs = last.map(p => (p.t - t0) / 1000), ys = last.map(p => p.m * 100); const mx = xs.reduce((s, x) => s + x) / xs.length, my = ys.reduce((s, y) => s + y) / ys.length; let nu = 0, de = 0; xs.forEach((x, i) => { nu += (x - mx) * (ys[i] - my); de += (x - mx) ** 2; }); a.slope = de ? nu / de : 0; } else a.slope = 0;
+  a.trend = a.slope > 60 ? 'subir' : a.slope < -60 ? 'descer' : 'estável';
+  a.diff = S.free ? null : (mean - S.target) * 100;
+  a.sustain = (now - T.segStart) / 1000;
+  const seg = voiced.filter(p => p.t >= T.segStart);
+  if (!S.free && seg.length > 20 && a.sustain > 0.8) { const att = seg.slice(0, 8).map(p => p.m), avgA = att.reduce((x, y) => x + y) / att.length; a.attack = (avgA - S.target) * 100; }
+  a.vol = S.rms > 0.3 ? 'alto' : S.rms < 0.02 ? 'baixo' : 'bom';
+  a.gaps = T.gaps.filter(g => now - g.t < 15000);
+  return a;
+}
+function describe(a) {
+  if (!a.voiced) {
+    if (a.silent > 60000 || !isFinite(a.silent)) return 'Ainda não ouvi nada. Quando estiveres pronto, canta uma nota confortável.';
+    return 'Silêncio há ' + (a.silent / 1000).toFixed(1) + ' s.' + (T.lastGapLen ? ' A tua última pausa para respirar durou ' + T.lastGapLen.toFixed(1) + ' s.' : '');
+  }
+  const p = [];
+  let s = 'Estou a ouvir um ' + fmtNote(a.note);
+  if (a.diff != null) {
+    const c = Math.round(Math.abs(a.diff));
+    if (c <= 15) s += ', afinado com o ' + noteName(S.target) + ' que pedi';
+    else if (c >= 100) s += ', ' + (c / 100).toFixed(1).replace('.', ',') + ' meios-tons ' + (a.diff < 0 ? 'abaixo' : 'acima') + ' do ' + noteName(S.target) + ' que pedi';
+    else s += ', cerca de ' + c + ' cêntimos ' + (a.diff < 0 ? 'abaixo' : 'acima') + ' do ' + noteName(S.target) + ' que pedi';
+  }
+  p.push(s + '.');
+  p.push(a.trend === 'estável' ? 'A altura está estável.' : 'A nota está a ' + a.trend + '.');
+  p.push(a.sd > 35 ? 'Há bastante oscilação (±' + Math.round(a.sd) + ' cêntimos).' : a.sd > 18 ? 'Há uma ligeira ondulação (±' + Math.round(a.sd) + ' cêntimos).' : 'Pouca oscilação, boa estabilidade.');
+  p.push(a.vol === 'alto' ? 'O volume está muito forte.' : a.vol === 'baixo' ? 'O volume está fraco.' : 'O volume está bom.');
+  if (a.attack != null && Math.abs(a.attack) > 30 && Math.abs(a.diff) < Math.abs(a.attack) - 15) p.push('Entraste ' + (a.attack < 0 ? 'abaixo' : 'acima') + ' e estás a corrigir.');
+  p.push('Estás a sustentar há ' + a.sustain.toFixed(1).replace('.', ',') + ' s' + (a.gaps.length ? ', com ' + a.gaps.length + ' pausa(s) para respirar nos últimos 15 s.' : '.'));
+  return p.join(' ');
+}
+const FR = {
+  breathe: ['Antes da próxima frase, enche a barriga de ar pelo nariz, sem levantar os ombros.', 'Aproveita o silêncio para respirar fundo: imagina que o ar desce até à cintura.', 'Respira com calma. Um bom fôlego antes de cantar poupa-te esforço na garganta.'],
+  loud: ['Estás a dar muita força. Canta com menos pressão: a voz soa melhor quando não a empurras.', 'Baixa um pouco o volume. Gritar cansa as pregas vocais; deixa o som fluir.'],
+  quiet: ['Ouço-te pouco. Apoia o ar com a barriga e abre mais a boca para o som sair.', 'Dá-me um pouco mais de voz: imagina que cantas para alguém ao fundo da sala.'],
+  wobble: ['A nota está a tremer. Apoia mais o ar com o diafragma e segura a nota estável, como uma linha reta.', 'Há oscilação. Mantém a barriga firme e o fluxo de ar constante, sem apertar a garganta.', 'Tenta pensar num fio de ar contínuo. A estabilidade vem do apoio, não da garganta.'],
+  low: ['Estás um pouco abaixo, sobe ligeiramente. Pensa a nota por cima, como se a apanhasses de cima.', 'Falta-te um bocadinho. Levanta as sobrancelhas e eleva o palato mole, como num bocejo.', 'Quase lá! Sobe ligeiramente — muitas vezes basta mais apoio de ar.'],
+  high: ['Estás um pouco acima, desce ligeiramente. Relaxa o maxilar e não empurres o ar.', 'Passaste um pouco da nota. Solta a tensão no pescoço e deixa a nota assentar.', 'Ligeiramente alto. Respira e deixa o som cair com naturalidade.'],
+  farLow: ['Estás bem abaixo da nota. Ouve outra vez a referência e imagina-a antes de cantar.', 'Essa nota ainda está longe, abaixo. Ouve a referência e tenta trautear primeiro de boca fechada.'],
+  farHigh: ['Estás bem acima da nota. Ouve a referência e procura-a com calma, a descer.', 'Muito acima. Relaxa, ouve outra vez a nota e entra suavemente.'],
+  falling: ['A nota está a descer no fim. Mantém o apoio até ao último instante da frase.', 'Estás a deixar cair a nota. Guarda ar para o fim e segura a barriga firme.'],
+  rising: ['A nota está a subir. Relaxa o maxilar e não aumentes a pressão do ar.'],
+  attack: ['Entraste abaixo e foste corrigindo. Da próxima vez, imagina a nota antes de cantar e entra já nela.', 'A entrada foi por baixo. Pensa a nota por cima e ataca-a de forma limpa.'],
+  good: ['Muito bem! Estás afinado. Mantém assim.', 'Isso! Bonita nota, estável e no sítio.', 'Perfeito. Sentes como isto é confortável? É este o apoio certo.', 'Excelente, estás mesmo em cima da nota.'],
+  progress: ['Boa! Estás a melhorar — já estás muito mais perto da nota.', 'Assim é que é! Corrigiste bem a afinação.'],
+  free: ['Boa nota! Agora tenta mantê-la estável durante mais uns segundos.', 'Estou a gostar. Experimenta segurar a nota sem a deixar oscilar.'],
+};
+function focusOf(a) {
+  if (!a.voiced) return a.silent > 1500 && a.silent < 30000 ? 'breathe' : null;
+  if (a.vol === 'alto') return 'loud';
+  if (a.vol === 'baixo') return 'quiet';
+  if (a.diff != null && Math.abs(a.diff) > 250) return a.diff < 0 ? 'farLow' : 'farHigh';
+  if (a.sd > 35) return 'wobble';
+  if (a.diff != null && a.diff < -20) return (T.prevDiff != null && T.prevDiff - Math.abs(a.diff) > 40) ? 'progress' : 'low';
+  if (a.diff != null && a.diff > 20) return (T.prevDiff != null && T.prevDiff - Math.abs(a.diff) > 40) ? 'progress' : 'high';
+  if (a.trend === 'descer' && a.sustain > 1.5) return 'falling';
+  if (a.trend === 'subir' && a.sustain > 1.5) return 'rising';
+  if (a.attack != null && a.attack < -30 && a.sustain < 3) return 'attack';
+  return S.free ? 'free' : 'good';
+}
+function teacherTick(now) {
+  if (T.speaking) return;
+  const a = analyse(now);
+  $('hearing').textContent = describe(a);
+  if (running) return;
+  const f = focusOf(a);
+  if (!f) return;
+  const changed = f !== T.lastFocus, since = now - T.lastAt;
+  if ((changed && since > 2000) || since > 3500) {
+    if (f === T.lastFocus && f === 'good' && since < 7000) return;
+    T.lastFocus = f; T.lastAt = now; if (a.diff != null) T.prevDiff = Math.abs(a.diff);
+    const txt = pick(FR[f], f);
+    // em modo livre/ao vivo fala só em mudanças relevantes e com espaço, para não interromper o canto
+    if (now - T.lastSpokenAt > 9000 && (changed || f === 'breathe')) { T.lastSpokenAt = now; speak(txt); } else $('teacher').textContent = txt;
+  }
+}
+function trackSegments(now) {
+  if (S.midi != null) { const gap = now - S.lastVoiceT; if (!S.lastVoiceT || gap > 300) { if (S.lastVoiceT && gap < 15000) { T.gaps.push({ t: now, len: gap }); T.lastGapLen = gap / 1000; } T.segStart = now; } S.lastVoiceT = now; }
+}
+function noteComment(r) {
+  if (!r.voiced) return pick(['Não te ouvi nessa nota. Entra logo depois da guia, sem medo.', 'Essa passou sem som. Respira e entra com confiança.'], 'nc0');
+  if (r.score >= 85) return pick(['Muito bem!', 'Isso mesmo!', 'Linda nota!', 'Perfeito!'], 'nc1');
+  if (Math.abs(r.cents) > 20) return r.cents < 0 ? pick(['Um pouco baixo, pensa por cima.', 'Faltou subir um bocadinho.'], 'nc2') : pick(['Um pouco alto, relaxa.', 'Passaste ligeiramente, solta o maxilar.'], 'nc3');
+  if (r.sd > 25) return pick(['Afinado, mas a tremer. Mais apoio.', 'Segura mais estável.'], 'nc4');
+  return pick(['Bem!', 'Boa, continua.'], 'nc5');
+}
+function exerciseTalk(total, acc, stab, tips, prev) {
+  let s = total >= 85 ? pick(['Que bom trabalho!', 'Fantástico, estou orgulhoso de ti!'], 'ex1') : total >= 60 ? pick(['Bom trabalho!', 'Está a ficar muito bem.'], 'ex2') : pick(['Não desanimes, isto treina-se.', 'Foi um bom começo. Vamos melhorar juntos.'], 'ex3');
+  s += ' Fizeste ' + total + ' por cento.';
+  if (prev != null && total > prev + 3) s += ' Melhoraste ' + (total - prev) + ' pontos desde a última vez!';
+  s += ' O meu conselho para a próxima: ' + tips[0];
+  return s;
+}
+
 // Range
 const range = () => store.get('canto.range', null);
 function showRange() { const r = range(); $('rangeInfo').textContent = r ? 'A tua extensão: ' + noteName(r.low) + ' – ' + noteName(r.high) : 'Ainda sem extensão guardada (usa-se Dó3–Dó4 por defeito).'; opts($('manLow'), 36, 84, r ? r.low : 48); opts($('manHigh'), 36, 84, r ? r.high : 60); }
@@ -168,7 +307,7 @@ async function runEx(key) {
   $('exSteps').innerHTML = notes.map((n, i) => `<div class="step" id="st${i}">${noteName(n.m)}</div>`).join('');
   document.querySelectorAll('.exBtn').forEach(b => b.disabled = true);
   const results = [];
-  $('exStatus').textContent = '🌬️ Inspira fundo… vamos começar.'; await sleep(1500);
+  $('exStatus').textContent = '🌬️ Inspira fundo… vamos começar.'; await speak(pick(['Vamos lá! Ouve cada nota e repete-a logo a seguir.', 'Prepara-te: respira fundo, ombros soltos, e repete cada nota que eu tocar.'], 'start')); await sleep(500);
   for (let i = 0; i < notes.length && !running.stop; i++) {
     const n = notes[i], el = $('st' + i); el.classList.add('cur');
     S.target = n.m; S.free = false; $('followTarget').checked = false; $('targetSel').value = n.m;
@@ -177,6 +316,7 @@ async function runEx(key) {
     const v = await captureNote(n.dur * 1000), res = scoreNote(v, n.m); results.push(res);
     el.classList.remove('cur'); el.classList.add(res.score >= 75 ? 'good' : res.score >= 45 ? 'ok' : 'bad');
     el.title = res.score + '%';
+    const nc = noteComment(res); $('exStatus').textContent = '🧑‍🏫 ' + nc; if (!running.stop) await speak(nc);
   }
   document.querySelectorAll('.exBtn').forEach(b => b.disabled = false);
   $('exRun').classList.add('hidden');
@@ -211,7 +351,9 @@ function summary(nome, rs) {
   <table><tr><th>Nota</th><th>Desvio</th><th>Oscilação</th><th>Pontos</th></tr>${rs.map(r => `<tr><td>${noteName(r.m)}</td><td>${r.voiced ? (r.cents > 0 ? '+' : '') + r.cents + ' ¢' : '—'}</td><td>${r.voiced ? r.sd + ' ¢' : '—'}</td><td>${r.score}%</td></tr>`).join('')}</table>
   <ul>${tips.map(t => '<li>' + t + '</li>').join('')}</ul>`;
   $('exSummary').classList.remove('hidden');
-  const h = store.get('canto.hist', []); h.unshift({ d: Date.now(), nome, total, acc, stab }); store.set('canto.hist', h.slice(0, 100));
+  const h = store.get('canto.hist', []);
+  const prev = (h.find(x => x.nome === nome) || {}).total;
+  const talk = exerciseTalk(total, acc, stab, tips, prev); $('exSummary').insertAdjacentHTML('afterbegin', '<p class="teacherSay">🧑‍🏫 ' + talk + '</p>'); speak(talk); h.unshift({ d: Date.now(), nome, total, acc, stab }); store.set('canto.hist', h.slice(0, 100));
 }
 function renderHist() {
   const h = store.get('canto.hist', []);
