@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Afinaro · Treinador de Canto</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>🎤 Afinaro <span>Treinador de Canto</span></h1>
+  <nav>
+    <button class="tab active" data-tab="live">Afinação ao vivo</button>
+    <button class="tab" data-tab="ex">Exercícios</button>
+    <button class="tab" data-tab="hist">Histórico</button>
+  </nav>
+</header>
+<main>
+  <div id="micBanner" class="card banner">
+    <p>Para começar, autoriza o acesso ao microfone. Usa auscultadores para melhores resultados.</p>
+    <button id="micBtn" class="primary">Ativar microfone</button>
+    <p id="micErr" class="err"></p>
+  </div>
+
+  <section id="live" class="panel active">
+    <div class="grid">
+      <div class="card noteCard">
+        <div class="label">Nota atual</div>
+        <div id="noteName" class="bigNote">—</div>
+        <div id="freq" class="sub">— Hz</div>
+        <div class="meter"><div class="scale"><span>-50</span><span>0</span><span>+50</span></div><div class="track"><div id="needle" class="needle"></div></div></div>
+        <div id="cents" class="sub">— cêntimos</div>
+        <div class="vol"><div class="label">Volume</div><div class="vtrack"><div id="volBar"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="label">Nota alvo</div>
+        <div class="row">
+          <select id="targetSel"></select>
+          <button id="playRef">▶ Ouvir nota</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="followTarget"> Sem alvo (modo livre)</label>
+        <div id="tip" class="tip">Canta uma nota para começar.</div>
+      </div>
+    </div>
+    <div class="card"><div class="label">Gráfico de afinação</div><canvas id="graph"></canvas></div>
+  </section>
+
+  <section id="ex" class="panel">
+    <div class="card">
+      <h2>1. Teste de extensão vocal</h2>
+      <p>Canta a nota mais grave confortável e segura-a ~2 s. Depois a mais aguda.</p>
+      <div class="row">
+        <button id="rangeLow">Gravar nota grave</button>
+        <button id="rangeHigh">Gravar nota aguda</button>
+      </div>
+      <p id="rangeInfo" class="sub"></p>
+      <div class="row"><label>Ou define manualmente: </label><select id="manLow"></select><select id="manHigh"></select><button id="saveMan">Guardar</button></div>
+    </div>
+    <div class="card">
+      <h2>2. Exercícios</h2>
+      <div class="exList">
+        <button class="exBtn" data-ex="sustain">🌬️ Aquecimento: nota sustentada</button>
+        <button class="exBtn" data-ex="scale">🎼 Escala de 5 notas (sobe e desce)</button>
+        <button class="exBtn" data-ex="arp">🎹 Arpejo maior</button>
+        <button class="exBtn" data-ex="intervals">↕️ Intervalos (3ª, 5ª, oitava)</button>
+      </div>
+      <div id="exRun" class="exRun hidden">
+        <div id="exTitle" class="label"></div>
+        <div id="exSteps" class="steps"></div>
+        <div id="exStatus" class="tip"></div>
+        <button id="exStop">Parar</button>
+      </div>
+      <div id="exSummary" class="hidden"></div>
+    </div>
+  </section>
+
+  <section id="hist" class="panel">
+    <div class="card"><h2>Histórico de sessões</h2><div id="histList"></div><button id="clearHist">Apagar histórico</button></div>
+  </section>
+</main>
+<footer>Funciona inteiramente no teu navegador — nenhum áudio é enviado.</footer>
+<script src="app.js"></script>
+</body>
+</html>
