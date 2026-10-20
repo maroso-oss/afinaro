@@ -47,6 +47,7 @@ function tone(m, dur = 1) {
 }
 
 $('micBtn').onclick = async () => {
+  unlockSpeech('Olá, vamos cantar!');
   if (!navigator.mediaDevices?.getUserMedia) { $('micErr').textContent = 'O teu navegador não suporta acesso ao microfone (é necessário HTTPS).'; return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
@@ -132,7 +133,7 @@ function drawGraph() {
 const pick = (arr, key) => { const last = T.lastPick[key]; let opts = arr.filter(x => x !== last); if (!opts.length) opts = arr; const s = opts[Math.floor(Math.random() * opts.length)]; T.lastPick[key] = s; return s; };
 const T = { lastPick: {}, lastFocus: null, lastAt: 0, lastSpokenAt: 0, speaking: false, voice: null, goodStreak: 0, prevDiff: null, segStart: 0, gaps: [] };
 const canSpeak = 'speechSynthesis' in window;
-$('speakToggle').checked = canSpeak && store.get('canto.voz', true);
+$('speakToggle').checked = canSpeak && store.get('canto.voz', true) !== false;
 $('speakToggle').disabled = !canSpeak;
 if (!canSpeak) $('voiceInfo').textContent = 'O teu navegador não tem síntese de voz.';
 $('speakToggle').onchange = e => { store.set('canto.voz', e.target.checked); if (!e.target.checked && canSpeak) speechSynthesis.cancel(); };
@@ -144,20 +145,44 @@ function chooseVoice() {
 }
 if (canSpeak) { chooseVoice(); speechSynthesis.onvoiceschanged = chooseVoice; }
 // Fala em voz alta; nunca por cima do tom guia; durante a fala a análise do micro fica em pausa.
+function makeUtter(text) {
+  const u = new SpeechSynthesisUtterance(text.replace(/[^\p{L}\p{N}\s.,;:!?'’()%#-]/gu, ''));
+  u.lang = T.voice ? T.voice.lang : 'pt-PT'; if (T.voice) u.voice = T.voice; u.rate = 1.0; u.pitch = 1.0; u.volume = 1;
+  return u;
+}
+// Tem de ser chamado DIRETAMENTE num clique (iOS/Safari só desbloqueia a fala dentro de um gesto).
+function unlockSpeech(text) {
+  if (!canSpeak || !$('speakToggle').checked) return false;
+  try {
+    if (!T.voice) chooseVoice();
+    if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
+    speechSynthesis.resume();
+    const u = makeUtter(text || 'Olá, vamos cantar!');
+    T.speaking = true; S.speaking = true;
+    const end = () => { clearTimeout(w); T.speaking = false; S.speaking = false; };
+    const w = setTimeout(end, 4000); u.onend = end; u.onerror = e => { end(); $('voiceInfo').textContent = 'Erro de voz: ' + (e.error || 'desconhecido'); };
+    speechSynthesis.speak(u); T.unlocked = true; return true;
+  } catch (e) { T.speaking = false; S.speaking = false; $('voiceInfo').textContent = 'Erro de voz: ' + e.message; return false; }
+}
 async function speak(text) {
   $('teacher').textContent = text;
   if (!canSpeak || !$('speakToggle').checked) return;
-  while (performance.now() < S.toneUntil) await sleep(100);
-  speechSynthesis.cancel();
+  const t0 = performance.now();
+  while (performance.now() < S.toneUntil && performance.now() - t0 < 5000) await sleep(100);
+  // não fazer cancel() imediatamente antes de speak() (bug do Chrome que descarta a fala)
+  if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); await sleep(80); }
   T.speaking = true; S.speaking = true;
-  await new Promise(res => {
-    const u = new SpeechSynthesisUtterance(text.replace(/[^\p{L}\p{N}\s.,;:!?'’()%#-]/gu, ''));
-    u.lang = T.voice ? T.voice.lang : 'pt-PT'; if (T.voice) u.voice = T.voice; u.rate = 1.0; u.pitch = 1.0;
-    const done = () => res(); u.onend = done; u.onerror = done;
-    setTimeout(done, 15000); speechSynthesis.speak(u);
-  });
-  await sleep(250); // deixa morrer o eco antes de voltar a ouvir
-  T.speaking = false; S.speaking = false; S.raw = []; S.hist.push({ t: performance.now(), m: null, rms: 0 });
+  try {
+    await new Promise(res => {
+      const u = makeUtter(text);
+      let fin = false; const done = () => { if (!fin) { fin = true; clearTimeout(w); clearInterval(k); res(); } };
+      u.onend = done; u.onerror = e => { if (e.error && e.error !== 'interrupted' && e.error !== 'canceled') $('voiceInfo').textContent = 'Erro de voz: ' + e.error; done(); };
+      const w = setTimeout(done, Math.min(12000, 2500 + text.length * 90)); // vigilante: onend pode nunca chegar
+      const k = setInterval(() => { if (speechSynthesis.paused) speechSynthesis.resume(); }, 1000); // Chrome pausa falas longas
+      speechSynthesis.resume(); speechSynthesis.speak(u);
+    });
+    await sleep(250); // deixa morrer o eco antes de voltar a ouvir
+  } finally { T.speaking = false; S.speaking = false; S.raw = []; S.hist.push({ t: performance.now(), m: null, rms: 0 }); }
 }
 const fmtNote = m => noteName(m) + ' (' + midiToFreq(Math.round(m)).toFixed(0) + ' Hz)';
 function analyse(now) {
@@ -292,7 +317,14 @@ const EX = {
   intervals: { nome: 'Intervalos (3ª, 5ª, oitava)', build: l => [[0, 4], [0, 7], [0, 12]].flat().map(i => ({ m: l + 1 + i, dur: 2 })) },
 };
 let running = null;
-document.querySelectorAll('.exBtn').forEach(b => b.onclick = () => runEx(b.dataset.ex));
+document.querySelectorAll('.exBtn').forEach(b => b.onclick = () => { if (!T.unlocked && !running) unlockSpeech('Vamos a isso!'); runEx(b.dataset.ex); });
+$('testVoice').onclick = () => {
+  if (!canSpeak) { $('voiceInfo').textContent = 'Este navegador não suporta voz sintetizada.'; return; }
+  if (!$('speakToggle').checked) { $('speakToggle').checked = true; store.set('canto.voz', true); }
+  chooseVoice();
+  const ok = unlockSpeech('Olá! Eu sou o teu professor de canto. Ouves-me bem?');
+  $('voiceInfo').textContent = ok ? 'A falar com: ' + (T.voice ? T.voice.name + ' (' + T.voice.lang + ')' : 'voz por defeito (pt-PT)') : 'Não foi possível falar neste navegador.';
+};
 $('exStop').onclick = () => { if (running) running.stop = true; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 

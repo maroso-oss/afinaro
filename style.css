@@ -22,3 +22,4 @@ canvas{width:100%;height:220px;display:block;background:#0003;border-radius:10px
 table{width:100%;border-collapse:collapse;margin:8px 0}td,th{padding:6px;border-bottom:1px solid #fff1;text-align:left}
 .score{font-size:2rem;font-weight:800;color:var(--acc2)}footer{text-align:center;color:var(--mut);font-size:.8rem;padding:20px}
 .hearing{font-size:1.05rem;line-height:1.5}.small{font-size:.8rem}.teacherSay{background:#7c5cff22;padding:12px;border-radius:10px;font-size:1.05rem}
+.switch{font-weight:600;color:var(--tx)}.switch input{width:20px;height:20px;vertical-align:middle;accent-color:var(--acc)}
