@@ -1,14 +1,14 @@
 'use strict';
+/* Afinaro — treinador de canto "Ouve e repete". Tudo corre no navegador. */
 const NOMES = ['Dó','Dó#','Ré','Ré#','Mi','Fá','Fá#','Sol','Sol#','Lá','Lá#','Si'];
-const $ = id => document.getElementById(id);
 const midiToFreq = m => 440 * Math.pow(2, (m - 69) / 12);
 const freqToMidi = f => 69 + 12 * Math.log2(f / 440);
-const noteName = m => NOMES[((Math.round(m) % 12) + 12) % 12] + (Math.floor(Math.round(m) / 12) - 1);
+const noteName = m => { const r = Math.round(m); return NOMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
 
-// YIN pitch detection
+// Deteção de altura YIN
 function yin(buf, sr, thr = 0.15) {
   const half = Math.floor(buf.length / 2), d = new Float32Array(half);
-  const minTau = Math.floor(sr / 1200), maxTau = Math.min(half - 1, Math.floor(sr / 60));
+  const minTau = Math.floor(sr / 1100), maxTau = Math.min(half - 1, Math.floor(sr / 65));
   for (let t = 1; t <= maxTau; t++) { let s = 0; for (let i = 0; i < half; i++) { const x = buf[i] - buf[i + t]; s += x * x; } d[t] = s; }
   let run = 0; d[0] = 1;
   for (let t = 1; t <= maxTau; t++) { run += d[t]; d[t] = run ? d[t] * t / run : 1; }
@@ -19,377 +19,491 @@ function yin(buf, sr, thr = 0.15) {
   const den = a + c - 2 * b, shift = den ? (a - c) / (2 * den) : 0;
   return { freq: sr / (tau + shift), clarity: 1 - b };
 }
-if (typeof module !== 'undefined') module.exports = { yin, noteName, freqToMidi };
-if (typeof document === 'undefined') { /* node test */ } else (function () {
 
-const S = { ctx: null, an: null, buf: null, midi: null, rms: 0, hist: [], target: 57, free: false, lastVoice: 0, silenceStart: performance.now(), tipAt: 0, listeners: [], toneUntil: 0, speaking: false };
-const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
+// Descrição de uma tentativa (puro, testável em Node)
+function devWord(c) {
+  const a = Math.abs(c), dir = c < 0 ? 'abaixo' : 'acima';
+  if (a <= 20) return 'certo';
+  if (a <= 60) return 'um pouco ' + dir;
+  if (a <= 140) return 'meio tom ' + dir;
+  return 'bem ' + dir + ' (uns ' + Math.round(a / 100) + ' meios-tons)';
+}
+function analyseNote(samples, target) {
+  // samples: [{m}] já dentro da janela da nota
+  const v = samples.filter(s => s.m != null);
+  const cover = samples.length ? v.length / samples.length : 0;
+  if (v.length < 6) return { target, voiced: false, cover, score: 0 };
+  let folded = false;
+  const ms = v.map(s => { const k = Math.round((target - s.m) / 12); if (k) folded = true; return s.m + 12 * k; });
+  const cents = ms.map(m => (m - target) * 100);
+  const third = Math.max(2, Math.floor(cents.length / 3));
+  const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const start = avg(cents.slice(0, third)), mid = avg(cents.slice(third, cents.length - third).concat(cents.length < 3 * third ? cents.slice(-1) : [])), end = avg(cents.slice(-third));
+  const mean = avg(cents.slice(Math.floor(cents.length * 0.2)));
+  const tail = cents.slice(Math.floor(cents.length * 0.4)), tm = avg(tail);
+  const sd = Math.sqrt(avg(tail.map(c => (c - tm) ** 2)));
+  const inTune = cents.filter(c => Math.abs(c) <= 35).length / cents.length;
+  const acc = Math.max(0, 100 - Math.max(0, Math.abs(mean) - 12) * 1.2);
+  const stab = Math.max(0, 100 - Math.max(0, sd - 10) * 1.6);
+  const score = Math.round((acc * 0.5 + stab * 0.2 + inTune * 100 * 0.3) * Math.min(1, cover / 0.6));
+  return { target, voiced: true, cover, start, mid, end, mean, sd, inTune, score, folded };
+}
+function explainNote(r) {
+  if (!r.voiced) return 'não te consegui ouvir' + (r.cover > 0 ? ' o tempo suficiente' : '');
+  const s = devWord(r.start), e = devWord(r.end);
+  const move = r.end - r.start;
+  let midTxt = Math.abs(move) < 25 ? (s === 'certo' ? 'mantiveste-te' : 'ficaste aí') : move > 0 ? 'subiste a meio' : 'desceste a meio';
+  let t = 'começaste ' + s + ', ' + midTxt + ' e acabaste ' + e;
+  if (s === e && Math.abs(move) < 25) t = s === 'certo' ? 'estiveste certo do princípio ao fim' : 'estiveste ' + s + ' do princípio ao fim';
+  if (r.sd > 35) t += ', com a nota a tremer bastante';
+  if (r.folded) t += ' (numa oitava diferente da minha — conta na mesma)';
+  return t;
+}
+function starsFor(score) { return score >= 85 ? 3 : score >= 65 ? 2 : score >= 40 ? 1 : 0; }
+if (typeof module !== 'undefined') module.exports = { yin, noteName, freqToMidi, analyseNote, explainNote, devWord, starsFor };
 
-// UI setup
-document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tab,.panel').forEach(e => e.classList.remove('active'));
-  b.classList.add('active'); $(b.dataset.tab).classList.add('active'); if (b.dataset.tab === 'hist') renderHist();
-});
-const opts = (sel, from, to, val) => { sel.innerHTML = ''; for (let m = from; m <= to; m++) { const o = new Option(noteName(m) + ' (' + midiToFreq(m).toFixed(0) + ' Hz)', m); if (m === val) o.selected = true; sel.add(o); } };
-opts($('targetSel'), 36, 84, 57);
-$('targetSel').onchange = e => S.target = +e.target.value;
-$('followTarget').onchange = e => S.free = e.target.checked;
-$('playRef').onclick = () => { ensureCtx(); tone(S.target, 1.2); };
+if (typeof document !== 'undefined') (function () {
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const now = () => performance.now();
+const KEY = 'afinaro.v2';
+const P = Object.assign({ range: null, tutDone: false, level: 0, item: 0, stars: {}, xp: 0, streak: { d: null, n: 0 }, hist: [], voz: true }, (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } })());
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(P)); } catch {} };
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-function ensureCtx() { if (!S.ctx) S.ctx = new (window.AudioContext || window.webkitAudioContext)(); if (S.ctx.state === 'suspended') S.ctx.resume(); return S.ctx; }
-function tone(m, dur = 1) {
-  const c = ensureCtx(), o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
-  o.type = 'triangle'; o.frequency.value = midiToFreq(m);
-  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.3, t + 0.05); g.gain.setValueAtTime(0.3, t + dur - 0.15); g.gain.linearRampToValueAtTime(0, t + dur);
-  S.toneUntil = performance.now() + dur * 1000 + 100;
-  o.connect(g).connect(c.destination); o.start(t); o.stop(t + dur + 0.05);
-  return new Promise(r => setTimeout(r, dur * 1000));
+/* ---------- Áudio ---------- */
+const S = { ctx: null, an: null, buf: null, stream: null, midi: null, rms: 0, trail: [], raw: [], toneUntil: 0, speaking: false, lane: null, rec: null, cur: null };
+function ensureCtx() {
+  if (!S.ctx) { S.ctx = new (window.AudioContext || window.webkitAudioContext)(); S.ctx.onstatechange = () => { if (S.ctx.state !== 'running' && S.stream) S.ctx.resume().catch(() => {}); }; }
+  if (S.ctx.state !== 'running') S.ctx.resume().catch(() => {});
+  return S.ctx;
+}
+// qualquer toque reativa o áudio (iOS suspende o AudioContext após o pedido de permissão, chamadas, etc.)
+['pointerdown', 'touchend', 'keydown'].forEach(ev => document.addEventListener(ev, () => { if (S.ctx && S.ctx.state !== 'running') S.ctx.resume().catch(() => {}); }, { passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.ctx) S.ctx.resume().catch(() => {}); });
+
+async function startMic() {
+  if (S.an) { ensureCtx(); return true; }
+  if (!navigator.mediaDevices?.getUserMedia) { $('micErr').textContent = 'Este navegador não permite usar o microfone (é preciso HTTPS).'; return false; }
+  const c = ensureCtx(); // criado dentro do gesto
+  try {
+    S.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) { $('micErr').textContent = 'Não consegui aceder ao microfone: ' + e.message + '. Verifica as permissões do navegador.'; return false; }
+  await c.resume().catch(() => {});
+  S.an = c.createAnalyser(); S.an.fftSize = 2048; S.buf = new Float32Array(S.an.fftSize);
+  c.createMediaStreamSource(S.stream).connect(S.an);
+  requestAnimationFrame(loop);
+  return true;
+}
+function playNotes(notes, t0perf) {
+  // notes: [{m, t0, t1}] em segundos relativos a t0perf
+  const c = ensureCtx(), base = c.currentTime + Math.max(0, (t0perf - now()) / 1000);
+  for (const n of notes) {
+    const f = midiToFreq(n.m), st = base + n.t0, en = base + n.t1 - 0.04;
+    const g = c.createGain(); g.connect(c.destination);
+    g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.32, st + 0.03); g.gain.exponentialRampToValueAtTime(0.18, st + 0.3); g.gain.setValueAtTime(0.18, Math.max(st + 0.31, en - 0.08)); g.gain.linearRampToValueAtTime(0.0001, en);
+    [[1, 'triangle', 1], [2, 'sine', 0.25], [3, 'sine', 0.08]].forEach(([mul, type, amp]) => { const o = c.createOscillator(), og = c.createGain(); o.type = type; o.frequency.value = f * mul; og.gain.value = amp; o.connect(og).connect(g); o.start(st); o.stop(en + 0.05); });
+  }
+  const last = Math.max(...notes.map(n => n.t1));
+  S.toneUntil = Math.max(S.toneUntil, t0perf + last * 1000 + 150);
 }
 
-$('micBtn').onclick = async () => {
-  unlockSpeech('Olá, vamos cantar!');
-  if (!navigator.mediaDevices?.getUserMedia) { $('micErr').textContent = 'O teu navegador não suporta acesso ao microfone (é necessário HTTPS).'; return; }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    const c = ensureCtx(); S.an = c.createAnalyser(); S.an.fftSize = 2048; S.buf = new Float32Array(S.an.fftSize);
-    c.createMediaStreamSource(stream).connect(S.an);
-    $('micBanner').classList.add('hidden'); loop();
-  } catch (e) { $('micErr').textContent = 'Não foi possível aceder ao microfone: ' + e.message; }
-};
-
-const GATE = 0.012;
+const GATE = 0.01;
 function loop() {
+  requestAnimationFrame(loop);
+  const t = now();
   S.an.getFloatTimeDomainData(S.buf);
-  let s = 0; for (const x of S.buf) s += x * x; S.rms = Math.sqrt(s / S.buf.length);
-  const now = performance.now(); let midi = null;
-  const busy = S.speaking || now < S.toneUntil;
-  if (!busy && S.rms > GATE) { const r = yin(S.buf, S.ctx.sampleRate); if (r && r.clarity > 0.8 && r.freq > 60 && r.freq < 1200) midi = freqToMidi(r.freq); }
-  // median smoothing
-  S.raw = (S.raw || []).concat([midi]).slice(-5);
+  let s = 0; for (let i = 0; i < S.buf.length; i++) s += S.buf[i] * S.buf[i];
+  S.rms = Math.sqrt(s / S.buf.length);
+  let m = null;
+  if (S.rms > GATE) { const r = yin(S.buf, S.ctx.sampleRate); if (r && r.clarity > 0.82 && r.freq > 65 && r.freq < 1100) m = freqToMidi(r.freq); }
+  S.raw.push(m); if (S.raw.length > 5) S.raw.shift();
   const v = S.raw.filter(x => x != null).sort((a, b) => a - b);
   S.midi = v.length >= 3 ? v[v.length >> 1] : null;
-  S.hist.push({ t: now, m: S.midi, rms: S.rms }); while (S.hist.length && now - S.hist[0].t > 6000) S.hist.shift();
-  trackSegments(now);
-  if (S.midi != null) { if (now - S.lastVoice > 2500) S.phraseStart = now; S.lastVoice = now; }
-  S.listeners.forEach(f => f(S.midi, S.rms, now));
-  render(now); requestAnimationFrame(loop);
+  const contaminated = t < S.toneUntil || S.speaking;
+  const tgt = targetAt(t);
+  S.trail.push({ t, m: S.midi, tgt, own: !contaminated, rms: S.rms });
+  while (S.trail.length && t - S.trail[0].t > 8000) S.trail.shift();
+  if (S.rec && !contaminated) S.rec.push({ t, m: S.midi, rms: S.rms });
+  S.frames = (S.frames || 0) + 1;
+  renderLive(t, tgt, contaminated);
+  drawLane(t);
+  if (Coach.active) Coach.tick(t, tgt, contaminated);
+}
+function targetAt(t) {
+  const L = S.lane; if (!L || L.phase !== 'sing') return null;
+  const rel = (t - L.start) / 1000; const n = L.notes.find(n => rel >= n.t0 && rel < n.t1); return n ? n.m : null;
+}
+function colorFor(c) { const a = Math.abs(c); return a <= 25 ? '#2ee59d' : a <= 60 ? '#ffc94a' : '#ff5f7e'; }
+
+function renderLive(t, tgt, contaminated) {
+  $('volBar').style.width = Math.min(100, S.rms * 500) + '%';
+  if (S.ctx.state !== 'running') { $('liveCents').textContent = '🔇 Toca no ecrã para ativar o som'; return; }
+  if (S.midi == null) { $('liveNote').textContent = '—'; $('liveCents').textContent = contaminated ? (S.speaking ? 'o professor está a falar' : 'a tocar a nota guia') : 'canta…'; $('needle').style.left = '50%'; $('needle').style.opacity = .35; return; }
+  const ref = tgt != null ? tgt : Math.round(S.midi);
+  let c = (S.midi - ref) * 100; if (tgt != null) { const k = Math.round(-c / 1200); c += k * 1200; }
+  $('liveNote').textContent = noteName(S.midi);
+  $('liveCents').textContent = tgt != null ? (Math.abs(c) <= 25 ? '✅ certo' : (c < 0 ? '⬆️ ' : '⬇️ ') + Math.abs(Math.round(c)) + ' cêntimos ' + (c < 0 ? 'abaixo' : 'acima')) : (c >= 0 ? '+' : '') + Math.round(c) + ' cêntimos';
+  $('needle').style.opacity = 1; $('needle').style.left = Math.max(2, Math.min(98, 50 + c / 2)) + '%';
+  $('needle').style.background = tgt != null ? colorFor(c) : '#fff';
 }
 
-function render(now) {
-  $('volBar').style.width = Math.min(100, S.rms * 600) + '%';
-  if (S.midi != null) {
-    const n = Math.round(S.midi), c = (S.midi - n) * 100;
-    $('noteName').textContent = noteName(n); $('freq').textContent = midiToFreq(S.midi).toFixed(1) + ' Hz';
-    $('cents').textContent = (c >= 0 ? '+' : '') + c.toFixed(0) + ' cêntimos'; $('needle').style.left = (50 + c) + '%';
+/* ---------- Pista (piano-roll) ---------- */
+const cv = $('lane'), g = cv.getContext('2d');
+function drawLane(t) {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth * dpr, H = cv.clientHeight * dpr;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  g.clearRect(0, 0, W, H);
+  const L = S.lane, pps = W / 5, px = W * 0.3;
+  let center;
+  if (L && L.notes.length) center = (Math.min(...L.notes.map(n => n.m)) + Math.max(...L.notes.map(n => n.m))) / 2;
+  else { const last = [...S.trail].reverse().find(p => p.m != null); center = S.freeCenter = S.freeCenter == null ? (last ? last.m : 57) : S.freeCenter + ((last ? last.m : S.freeCenter) - S.freeCenter) * 0.03; }
+  const span = Math.max(7, L && L.notes.length ? (Math.max(...L.notes.map(n => n.m)) - Math.min(...L.notes.map(n => n.m))) / 2 + 3 : 7);
+  const y = m => H / 2 - (m - center) / span * (H / 2 - 12 * dpr);
+  // grelha
+  g.font = (11 * dpr) + 'px system-ui'; g.textBaseline = 'middle';
+  for (let m = Math.floor(center - span); m <= Math.ceil(center + span); m++) {
+    const nat = !NOMES[((m % 12) + 12) % 12].includes('#');
+    g.fillStyle = nat ? '#ffffff08' : '#00000000'; g.fillRect(0, y(m + .5), W, y(m - .5) - y(m + .5));
+    if (nat) { g.fillStyle = '#ffffff55'; g.fillText(noteName(m), 6 * dpr, y(m)); }
   }
-  if (now - S.tipAt > 500) { S.tipAt = now; teacherTick(now); }
-  drawGraph();
-}
-
-function stats(win = 1000) {
-  const now = performance.now(), pts = S.hist.filter(p => now - p.t < win && p.m != null).map(p => p.m);
-  if (pts.length < 8) return null;
-  const mean = pts.reduce((a, b) => a + b) / pts.length, sd = Math.sqrt(pts.reduce((a, b) => a + (b - mean) ** 2, 0) / pts.length);
-  return { mean, sd: sd * 100 };
-}
-function liveTip(now) {
-  const silent = now - S.lastVoice;
-  if (S.midi == null) {
-    if (silent > 8000) return '😮‍💨 Antes da próxima frase, inspira fundo pelo nariz, ombros relaxados.';
-    if (silent > 1500) return '🌬️ Respira: enche a barriga de ar antes de começar a frase.';
-    return 'A ouvir…';
+  // linhas de tempo a correr (mostra que está vivo)
+  g.strokeStyle = '#ffffff0d'; g.lineWidth = 1;
+  for (let k = -10; k < 10; k++) { const x = px + (k - ((t / 1000) % 1)) * pps; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+  // blocos-alvo
+  if (L) {
+    const rel = (t - L.start) / 1000;
+    for (const n of L.notes) {
+      const x0 = px + (n.t0 - rel) * pps, x1 = px + (n.t1 - rel) * pps; if (x1 < 0 || x0 > W) continue;
+      const active = rel >= n.t0 && rel < n.t1, hgt = 0.8 / span * (H / 2);
+      const grd = g.createLinearGradient(x0, 0, x1, 0);
+      grd.addColorStop(0, L.phase === 'listen' ? '#ff564f' : '#f0478a'); grd.addColorStop(1, '#c536e8');
+      g.globalAlpha = active ? 1 : 0.55; g.fillStyle = grd;
+      roundRect(x0 + 2, y(n.m) - hgt / 2, Math.max(4, x1 - x0 - 4), hgt, 8 * dpr); g.fill(); g.globalAlpha = 1;
+      if (n.res) { g.fillStyle = colorFor(n.res.mean ?? 999); g.fillRect(x0 + 2, y(n.m) + hgt / 2 + 2, Math.max(4, x1 - x0 - 4), 4 * dpr); }
+      g.fillStyle = '#fff'; g.font = 'bold ' + (12 * dpr) + 'px system-ui'; if (x1 - x0 > 40 * dpr) g.fillText(n.label || noteName(n.m), x0 + 8 * dpr, y(n.m));
+    }
   }
-  if (S.rms > 0.3) return '🔊 Está muito alto — canta com menos força, sem gritar.';
-  if (S.rms < 0.02) return '🔈 Está muito baixo — projeta mais a voz, com apoio do diafragma.';
-  const st = stats();
-  if (st && st.sd > 35) return '〰️ A nota está instável — apoia mais o ar, segura a nota estável.';
-  if (st && st.sd > 18 && st.sd <= 35) return '🎶 Ligeira oscilação — mantém o fluxo de ar constante.';
-  if (S.free) return '✨ Boa! Mantém a nota ' + noteName(S.midi) + '.';
-  const diff = ((st ? st.mean : S.midi) - S.target) * 100;
-  if (Math.abs(diff) > 250) return diff < 0 ? '⬆️ Estás bastante abaixo de ' + noteName(S.target) + '. Ouve a nota de referência.' : '⬇️ Estás bastante acima de ' + noteName(S.target) + '. Ouve a nota de referência.';
-  if (diff < -20) return '⬆️ Estás um pouco abaixo, sobe ligeiramente.';
-  if (diff > 20) return '⬇️ Estás um pouco acima, desce ligeiramente.';
-  return '✅ Perfeito! Estás afinado em ' + noteName(S.target) + '.';
-}
-
-const cv = $('graph'), g = cv.getContext('2d');
-function drawGraph() {
-  const w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = cv.clientHeight * devicePixelRatio;
-  const pts = S.hist.filter(p => p.m != null).map(p => p.m);
-  const center = S.free ? (pts.length ? pts[pts.length - 1] : 60) : S.target;
-  const span = 6, y = m => h / 2 - (m - center) / span * (h / 2), now = performance.now();
-  g.font = (11 * devicePixelRatio) + 'px sans-serif';
-  for (let m = Math.ceil(center - span); m <= center + span; m++) {
-    g.strokeStyle = '#ffffff14'; g.beginPath(); g.moveTo(0, y(m)); g.lineTo(w, y(m)); g.stroke();
-    g.fillStyle = '#9aa0c7'; g.fillText(noteName(m), 4, y(m) - 2);
+  // linha de leitura
+  g.strokeStyle = '#ffffff66'; g.lineWidth = 2 * dpr; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, H); g.stroke();
+  // rasto da voz
+  g.lineWidth = 4 * dpr; g.lineCap = 'round';
+  let prev = null;
+  for (const p of S.trail) {
+    const x = px - (t - p.t) / 1000 * pps;
+    if (p.m == null || x < 0) { prev = null; continue; }
+    let m = p.m; if (p.tgt != null) m += 12 * Math.round((p.tgt - m) / 12);
+    if (prev && Math.abs(prev.m - m) < 2) { g.strokeStyle = !p.own ? '#ffffff30' : p.tgt != null ? colorFor((m - p.tgt) * 100) : '#ffffffcc'; g.beginPath(); g.moveTo(prev.x, y(prev.m)); g.lineTo(x, y(m)); g.stroke(); }
+    prev = { x, m };
   }
-  if (!S.free) { g.fillStyle = '#22d3a622'; g.fillRect(0, y(S.target + 0.2), w, y(S.target - 0.2) - y(S.target + 0.2)); g.strokeStyle = '#22d3a6'; g.lineWidth = 2; g.beginPath(); g.moveTo(0, y(S.target)); g.lineTo(w, y(S.target)); g.stroke(); }
-  g.strokeStyle = '#a78bff'; g.lineWidth = 3 * devicePixelRatio; g.beginPath(); let pen = false;
-  for (const p of S.hist) { const x = w - (now - p.t) / 6000 * w; if (p.m == null) { pen = false; continue; } pen ? g.lineTo(x, y(p.m)) : g.moveTo(x, y(p.m)); pen = true; }
-  g.stroke();
+  // bolinha
+  const last = S.trail[S.trail.length - 1];
+  if (last && last.m != null) {
+    let m = last.m; if (last.tgt != null) m += 12 * Math.round((last.tgt - m) / 12);
+    const col = !last.own ? '#ffffff55' : last.tgt != null ? colorFor((m - last.tgt) * 100) : '#fff';
+    g.fillStyle = col; g.shadowColor = col; g.shadowBlur = 18 * dpr; g.beginPath(); g.arc(px, y(m), 9 * dpr, 0, 7); g.fill(); g.shadowBlur = 0;
+  } else { g.strokeStyle = '#ffffff40'; g.lineWidth = 2 * dpr; g.beginPath(); g.arc(px, H / 2, (6 + 3 * Math.sin(t / 300)) * dpr, 0, 7); g.stroke(); }
 }
+function roundRect(x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
 
-// ===== Professor: o que estou a ouvir + persona + voz =====
-const pick = (arr, key) => { const last = T.lastPick[key]; let opts = arr.filter(x => x !== last); if (!opts.length) opts = arr; const s = opts[Math.floor(Math.random() * opts.length)]; T.lastPick[key] = s; return s; };
-const T = { lastPick: {}, lastFocus: null, lastAt: 0, lastSpokenAt: 0, speaking: false, voice: null, goodStreak: 0, prevDiff: null, segStart: 0, gaps: [] };
+/* ---------- Voz do professor ---------- */
 const canSpeak = 'speechSynthesis' in window;
-$('speakToggle').checked = canSpeak && store.get('canto.voz', true) !== false;
-$('speakToggle').disabled = !canSpeak;
-if (!canSpeak) $('voiceInfo').textContent = 'O teu navegador não tem síntese de voz.';
-$('speakToggle').onchange = e => { store.set('canto.voz', e.target.checked); if (!e.target.checked && canSpeak) speechSynthesis.cancel(); };
+let voice = null, unlocked = false;
 function chooseVoice() {
-  if (!canSpeak) return;
-  const vs = speechSynthesis.getVoices();
-  T.voice = vs.find(v => /^pt[-_]PT/i.test(v.lang)) || vs.find(v => /^pt[-_]BR/i.test(v.lang)) || vs.find(v => /^pt/i.test(v.lang)) || null;
-  $('voiceInfo').textContent = T.voice ? 'Voz: ' + T.voice.name + ' (' + T.voice.lang + ')' + (/PT/i.test(T.voice.lang) ? '' : ' — não há voz pt-PT neste dispositivo') : (vs.length ? 'Sem voz portuguesa neste dispositivo; será usada a voz por defeito.' : '');
+  if (!canSpeak) return; const vs = speechSynthesis.getVoices();
+  voice = vs.find(v => /^pt[-_]PT/i.test(v.lang)) || vs.find(v => /^pt[-_]BR/i.test(v.lang)) || vs.find(v => /^pt/i.test(v.lang)) || null;
+  $('voiceInfo').textContent = !canSpeak ? 'Sem voz neste navegador.' : voice ? 'Voz: ' + voice.name + ' (' + voice.lang + ')' + (/PT/i.test(voice.lang) ? '' : ' — sem voz pt-PT neste aparelho') : 'Voz por defeito do aparelho (pt-PT)';
 }
 if (canSpeak) { chooseVoice(); speechSynthesis.onvoiceschanged = chooseVoice; }
-// Fala em voz alta; nunca por cima do tom guia; durante a fala a análise do micro fica em pausa.
-function makeUtter(text) {
-  const u = new SpeechSynthesisUtterance(text.replace(/[^\p{L}\p{N}\s.,;:!?'’()%#-]/gu, ''));
-  u.lang = T.voice ? T.voice.lang : 'pt-PT'; if (T.voice) u.voice = T.voice; u.rate = 1.0; u.pitch = 1.0; u.volume = 1;
-  return u;
+const voiceOn = () => canSpeak && P.voz !== false;
+function syncSound() { $('speakToggle').checked = voiceOn(); $('soundBtn').textContent = voiceOn() ? '🔊' : '🔇'; }
+$('speakToggle').onchange = e => { P.voz = e.target.checked; save(); syncSound(); if (!P.voz && canSpeak) speechSynthesis.cancel(); };
+$('soundBtn').onclick = () => { P.voz = !voiceOn(); save(); syncSound(); if (P.voz) unlockSpeech('Voz ligada.'); else if (canSpeak) speechSynthesis.cancel(); };
+function utter(text) {
+  const u = new SpeechSynthesisUtterance(text.replace(/#/g, ' sustenido').replace(/[^\p{L}\p{N}\s.,;:!?'’()%-]/gu, ''));
+  u.lang = voice ? voice.lang : 'pt-PT'; if (voice) u.voice = voice; u.rate = 1.02; return u;
 }
-// Tem de ser chamado DIRETAMENTE num clique (iOS/Safari só desbloqueia a fala dentro de um gesto).
-function unlockSpeech(text) {
-  if (!canSpeak || !$('speakToggle').checked) return false;
-  try {
-    if (!T.voice) chooseVoice();
-    if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
-    speechSynthesis.resume();
-    const u = makeUtter(text || 'Olá, vamos cantar!');
-    T.speaking = true; S.speaking = true;
-    const end = () => { clearTimeout(w); T.speaking = false; S.speaking = false; };
-    const w = setTimeout(end, 4000); u.onend = end; u.onerror = e => { end(); $('voiceInfo').textContent = 'Erro de voz: ' + (e.error || 'desconhecido'); };
-    speechSynthesis.speak(u); T.unlocked = true; return true;
-  } catch (e) { T.speaking = false; S.speaking = false; $('voiceInfo').textContent = 'Erro de voz: ' + e.message; return false; }
+function unlockSpeech(text) { // tem de ser chamada diretamente no clique
+  if (!voiceOn()) return false;
+  try { if (!voice) chooseVoice(); if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel(); speechSynthesis.resume(); speechSynthesis.speak(utter(text)); unlocked = true; return true; }
+  catch (e) { $('voiceInfo').textContent = 'Erro de voz: ' + e.message; return false; }
 }
+function say(text) { $('teacherText').textContent = text; }
 async function speak(text) {
-  $('teacher').textContent = text;
-  if (!canSpeak || !$('speakToggle').checked) return;
-  const t0 = performance.now();
-  while (performance.now() < S.toneUntil && performance.now() - t0 < 5000) await sleep(100);
-  // não fazer cancel() imediatamente antes de speak() (bug do Chrome que descarta a fala)
+  say(text);
+  if (!voiceOn()) return;
+  const t0 = now(); while (now() < S.toneUntil && now() - t0 < 6000) await sleep(80);
   if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); await sleep(80); }
-  T.speaking = true; S.speaking = true;
+  S.speaking = true;
   try {
     await new Promise(res => {
-      const u = makeUtter(text);
-      let fin = false; const done = () => { if (!fin) { fin = true; clearTimeout(w); clearInterval(k); res(); } };
-      u.onend = done; u.onerror = e => { if (e.error && e.error !== 'interrupted' && e.error !== 'canceled') $('voiceInfo').textContent = 'Erro de voz: ' + e.error; done(); };
-      const w = setTimeout(done, Math.min(12000, 2500 + text.length * 90)); // vigilante: onend pode nunca chegar
-      const k = setInterval(() => { if (speechSynthesis.paused) speechSynthesis.resume(); }, 1000); // Chrome pausa falas longas
+      const u = utter(text); let fin = false;
+      const done = () => { if (!fin) { fin = true; clearTimeout(w); clearInterval(k); res(); } };
+      u.onend = done; u.onerror = done;
+      const w = setTimeout(done, Math.min(14000, 2500 + text.length * 85)); // vigilante
+      const k = setInterval(() => { if (speechSynthesis.paused) speechSynthesis.resume(); }, 1000);
       speechSynthesis.resume(); speechSynthesis.speak(u);
     });
-    await sleep(250); // deixa morrer o eco antes de voltar a ouvir
-  } finally { T.speaking = false; S.speaking = false; S.raw = []; S.hist.push({ t: performance.now(), m: null, rms: 0 }); }
+  } finally { await sleep(200); S.speaking = false; }
 }
-const fmtNote = m => noteName(m) + ' (' + midiToFreq(Math.round(m)).toFixed(0) + ' Hz)';
-function analyse(now) {
-  const voiced = S.hist.filter(p => p.m != null);
-  const recent = voiced.filter(p => now - p.t < 1200);
-  const silent = now - S.lastVoice;
-  const a = { silent, voiced: S.midi != null && recent.length >= 6 };
-  if (!a.voiced) return a;
-  const ms = recent.map(p => p.m), mean = ms.reduce((x, y) => x + y) / ms.length;
-  a.mean = mean; a.note = Math.round(mean);
-  a.sd = Math.sqrt(ms.reduce((x, y) => x + (y - mean) ** 2, 0) / ms.length) * 100;
-  const last = voiced.filter(p => now - p.t < 700);
-  if (last.length > 5) { const t0 = last[0].t, xs = last.map(p => (p.t - t0) / 1000), ys = last.map(p => p.m * 100); const mx = xs.reduce((s, x) => s + x) / xs.length, my = ys.reduce((s, y) => s + y) / ys.length; let nu = 0, de = 0; xs.forEach((x, i) => { nu += (x - mx) * (ys[i] - my); de += (x - mx) ** 2; }); a.slope = de ? nu / de : 0; } else a.slope = 0;
-  a.trend = a.slope > 60 ? 'subir' : a.slope < -60 ? 'descer' : 'estável';
-  a.diff = S.free ? null : (mean - S.target) * 100;
-  a.sustain = (now - T.segStart) / 1000;
-  const seg = voiced.filter(p => p.t >= T.segStart);
-  if (!S.free && seg.length > 20 && a.sustain > 0.8) { const att = seg.slice(0, 8).map(p => p.m), avgA = att.reduce((x, y) => x + y) / att.length; a.attack = (avgA - S.target) * 100; }
-  a.vol = S.rms > 0.3 ? 'alto' : S.rms < 0.02 ? 'baixo' : 'bom';
-  a.gaps = T.gaps.filter(g => now - g.t < 15000);
-  return a;
-}
-function describe(a) {
-  if (!a.voiced) {
-    if (a.silent > 60000 || !isFinite(a.silent)) return 'Ainda não ouvi nada. Quando estiveres pronto, canta uma nota confortável.';
-    return 'Silêncio há ' + (a.silent / 1000).toFixed(1) + ' s.' + (T.lastGapLen ? ' A tua última pausa para respirar durou ' + T.lastGapLen.toFixed(1) + ' s.' : '');
-  }
-  const p = [];
-  let s = 'Estou a ouvir um ' + fmtNote(a.note);
-  if (a.diff != null) {
-    const c = Math.round(Math.abs(a.diff));
-    if (c <= 15) s += ', afinado com o ' + noteName(S.target) + ' que pedi';
-    else if (c >= 100) s += ', ' + (c / 100).toFixed(1).replace('.', ',') + ' meios-tons ' + (a.diff < 0 ? 'abaixo' : 'acima') + ' do ' + noteName(S.target) + ' que pedi';
-    else s += ', cerca de ' + c + ' cêntimos ' + (a.diff < 0 ? 'abaixo' : 'acima') + ' do ' + noteName(S.target) + ' que pedi';
-  }
-  p.push(s + '.');
-  p.push(a.trend === 'estável' ? 'A altura está estável.' : 'A nota está a ' + a.trend + '.');
-  p.push(a.sd > 35 ? 'Há bastante oscilação (±' + Math.round(a.sd) + ' cêntimos).' : a.sd > 18 ? 'Há uma ligeira ondulação (±' + Math.round(a.sd) + ' cêntimos).' : 'Pouca oscilação, boa estabilidade.');
-  p.push(a.vol === 'alto' ? 'O volume está muito forte.' : a.vol === 'baixo' ? 'O volume está fraco.' : 'O volume está bom.');
-  if (a.attack != null && Math.abs(a.attack) > 30 && Math.abs(a.diff) < Math.abs(a.attack) - 15) p.push('Entraste ' + (a.attack < 0 ? 'abaixo' : 'acima') + ' e estás a corrigir.');
-  p.push('Estás a sustentar há ' + a.sustain.toFixed(1).replace('.', ',') + ' s' + (a.gaps.length ? ', com ' + a.gaps.length + ' pausa(s) para respirar nos últimos 15 s.' : '.'));
-  return p.join(' ');
-}
-const FR = {
-  breathe: ['Antes da próxima frase, enche a barriga de ar pelo nariz, sem levantar os ombros.', 'Aproveita o silêncio para respirar fundo: imagina que o ar desce até à cintura.', 'Respira com calma. Um bom fôlego antes de cantar poupa-te esforço na garganta.'],
-  loud: ['Estás a dar muita força. Canta com menos pressão: a voz soa melhor quando não a empurras.', 'Baixa um pouco o volume. Gritar cansa as pregas vocais; deixa o som fluir.'],
-  quiet: ['Ouço-te pouco. Apoia o ar com a barriga e abre mais a boca para o som sair.', 'Dá-me um pouco mais de voz: imagina que cantas para alguém ao fundo da sala.'],
-  wobble: ['A nota está a tremer. Apoia mais o ar com o diafragma e segura a nota estável, como uma linha reta.', 'Há oscilação. Mantém a barriga firme e o fluxo de ar constante, sem apertar a garganta.', 'Tenta pensar num fio de ar contínuo. A estabilidade vem do apoio, não da garganta.'],
-  low: ['Estás um pouco abaixo, sobe ligeiramente. Pensa a nota por cima, como se a apanhasses de cima.', 'Falta-te um bocadinho. Levanta as sobrancelhas e eleva o palato mole, como num bocejo.', 'Quase lá! Sobe ligeiramente — muitas vezes basta mais apoio de ar.'],
-  high: ['Estás um pouco acima, desce ligeiramente. Relaxa o maxilar e não empurres o ar.', 'Passaste um pouco da nota. Solta a tensão no pescoço e deixa a nota assentar.', 'Ligeiramente alto. Respira e deixa o som cair com naturalidade.'],
-  farLow: ['Estás bem abaixo da nota. Ouve outra vez a referência e imagina-a antes de cantar.', 'Essa nota ainda está longe, abaixo. Ouve a referência e tenta trautear primeiro de boca fechada.'],
-  farHigh: ['Estás bem acima da nota. Ouve a referência e procura-a com calma, a descer.', 'Muito acima. Relaxa, ouve outra vez a nota e entra suavemente.'],
-  falling: ['A nota está a descer no fim. Mantém o apoio até ao último instante da frase.', 'Estás a deixar cair a nota. Guarda ar para o fim e segura a barriga firme.'],
-  rising: ['A nota está a subir. Relaxa o maxilar e não aumentes a pressão do ar.'],
-  attack: ['Entraste abaixo e foste corrigindo. Da próxima vez, imagina a nota antes de cantar e entra já nela.', 'A entrada foi por baixo. Pensa a nota por cima e ataca-a de forma limpa.'],
-  good: ['Muito bem! Estás afinado. Mantém assim.', 'Isso! Bonita nota, estável e no sítio.', 'Perfeito. Sentes como isto é confortável? É este o apoio certo.', 'Excelente, estás mesmo em cima da nota.'],
-  progress: ['Boa! Estás a melhorar — já estás muito mais perto da nota.', 'Assim é que é! Corrigiste bem a afinação.'],
-  free: ['Boa nota! Agora tenta mantê-la estável durante mais uns segundos.', 'Estou a gostar. Experimenta segurar a nota sem a deixar oscilar.'],
-};
-function focusOf(a) {
-  if (!a.voiced) return a.silent > 1500 && a.silent < 30000 ? 'breathe' : null;
-  if (a.vol === 'alto') return 'loud';
-  if (a.vol === 'baixo') return 'quiet';
-  if (a.diff != null && Math.abs(a.diff) > 250) return a.diff < 0 ? 'farLow' : 'farHigh';
-  if (a.sd > 35) return 'wobble';
-  if (a.diff != null && a.diff < -20) return (T.prevDiff != null && T.prevDiff - Math.abs(a.diff) > 40) ? 'progress' : 'low';
-  if (a.diff != null && a.diff > 20) return (T.prevDiff != null && T.prevDiff - Math.abs(a.diff) > 40) ? 'progress' : 'high';
-  if (a.trend === 'descer' && a.sustain > 1.5) return 'falling';
-  if (a.trend === 'subir' && a.sustain > 1.5) return 'rising';
-  if (a.attack != null && a.attack < -30 && a.sustain < 3) return 'attack';
-  return S.free ? 'free' : 'good';
-}
-function teacherTick(now) {
-  if (T.speaking) return;
-  const a = analyse(now);
-  $('hearing').textContent = describe(a);
-  if (running) return;
-  const f = focusOf(a);
-  if (!f) return;
-  const changed = f !== T.lastFocus, since = now - T.lastAt;
-  if ((changed && since > 2000) || since > 3500) {
-    if (f === T.lastFocus && f === 'good' && since < 7000) return;
-    T.lastFocus = f; T.lastAt = now; if (a.diff != null) T.prevDiff = Math.abs(a.diff);
-    const txt = pick(FR[f], f);
-    // em modo livre/ao vivo fala só em mudanças relevantes e com espaço, para não interromper o canto
-    if (now - T.lastSpokenAt > 9000 && (changed || f === 'breathe')) { T.lastSpokenAt = now; speak(txt); } else $('teacher').textContent = txt;
-  }
-}
-function trackSegments(now) {
-  if (S.midi != null) { const gap = now - S.lastVoiceT; if (!S.lastVoiceT || gap > 300) { if (S.lastVoiceT && gap < 15000) { T.gaps.push({ t: now, len: gap }); T.lastGapLen = gap / 1000; } T.segStart = now; } S.lastVoiceT = now; }
-}
-function noteComment(r) {
-  if (!r.voiced) return pick(['Não te ouvi nessa nota. Entra logo depois da guia, sem medo.', 'Essa passou sem som. Respira e entra com confiança.'], 'nc0');
-  if (r.score >= 85) return pick(['Muito bem!', 'Isso mesmo!', 'Linda nota!', 'Perfeito!'], 'nc1');
-  if (Math.abs(r.cents) > 20) return r.cents < 0 ? pick(['Um pouco baixo, pensa por cima.', 'Faltou subir um bocadinho.'], 'nc2') : pick(['Um pouco alto, relaxa.', 'Passaste ligeiramente, solta o maxilar.'], 'nc3');
-  if (r.sd > 25) return pick(['Afinado, mas a tremer. Mais apoio.', 'Segura mais estável.'], 'nc4');
-  return pick(['Bem!', 'Boa, continua.'], 'nc5');
-}
-function exerciseTalk(total, acc, stab, tips, prev) {
-  let s = total >= 85 ? pick(['Que bom trabalho!', 'Fantástico, estou orgulhoso de ti!'], 'ex1') : total >= 60 ? pick(['Bom trabalho!', 'Está a ficar muito bem.'], 'ex2') : pick(['Não desanimes, isto treina-se.', 'Foi um bom começo. Vamos melhorar juntos.'], 'ex3');
-  s += ' Fizeste ' + total + ' por cento.';
-  if (prev != null && total > prev + 3) s += ' Melhoraste ' + (total - prev) + ' pontos desde a última vez!';
-  s += ' O meu conselho para a próxima: ' + tips[0];
-  return s;
-}
-
-// Range
-const range = () => store.get('canto.range', null);
-function showRange() { const r = range(); $('rangeInfo').textContent = r ? 'A tua extensão: ' + noteName(r.low) + ' – ' + noteName(r.high) : 'Ainda sem extensão guardada (usa-se Dó3–Dó4 por defeito).'; opts($('manLow'), 36, 84, r ? r.low : 48); opts($('manHigh'), 36, 84, r ? r.high : 60); }
-showRange();
-$('saveMan').onclick = () => { const l = +$('manLow').value, h = +$('manHigh').value; if (h - l < 5) return alert('A extensão deve ter pelo menos 5 semitons.'); store.set('canto.range', { low: l, high: h }); showRange(); };
-function captureNote(ms = 2000) {
-  return new Promise(res => { const vals = [], t0 = performance.now(); const f = (m, r, now) => { if (m != null) vals.push(m); if (now - t0 > ms) { S.listeners = S.listeners.filter(x => x !== f); res(vals); } }; S.listeners.push(f); });
-}
-async function recRange(which) {
-  if (!S.an) return alert('Ativa primeiro o microfone.');
-  $('rangeInfo').textContent = 'A ouvir… canta e segura a nota ' + (which === 'low' ? 'grave' : 'aguda') + '.';
-  const v = await captureNote(2500);
-  if (v.length < 20) { $('rangeInfo').textContent = 'Não ouvi uma nota estável. Tenta outra vez, mais perto do microfone.'; return; }
-  v.sort((a, b) => a - b); const m = Math.round(v[v.length >> 1]);
-  const r = range() || { low: 48, high: 60 }; r[which] = m;
-  if (r.high - r.low < 5) { which === 'low' ? r.high = r.low + 7 : r.low = r.high - 7; }
-  store.set('canto.range', r); showRange();
-}
-$('rangeLow').onclick = () => recRange('low'); $('rangeHigh').onclick = () => recRange('high');
-
-// Exercises
-const EX = {
-  sustain: { nome: 'Aquecimento: nota sustentada', build: (l, h) => { const m = Math.round(l + (h - l) * 0.35); return [m, m + 2, m + 4].map(n => ({ m: n, dur: 4 })); } },
-  scale: { nome: 'Escala de 5 notas', build: l => [0, 2, 4, 5, 7, 5, 4, 2, 0].map(i => ({ m: l + 2 + i, dur: 1.6 })) },
-  arp: { nome: 'Arpejo maior', build: l => [0, 4, 7, 12, 7, 4, 0].map(i => ({ m: l + 1 + i, dur: 1.8 })) },
-  intervals: { nome: 'Intervalos (3ª, 5ª, oitava)', build: l => [[0, 4], [0, 7], [0, 12]].flat().map(i => ({ m: l + 1 + i, dur: 2 })) },
-};
-let running = null;
-document.querySelectorAll('.exBtn').forEach(b => b.onclick = () => { if (!T.unlocked && !running) unlockSpeech('Vamos a isso!'); runEx(b.dataset.ex); });
 $('testVoice').onclick = () => {
   if (!canSpeak) { $('voiceInfo').textContent = 'Este navegador não suporta voz sintetizada.'; return; }
-  if (!$('speakToggle').checked) { $('speakToggle').checked = true; store.set('canto.voz', true); }
-  chooseVoice();
+  P.voz = true; save(); syncSound(); chooseVoice();
   const ok = unlockSpeech('Olá! Eu sou o teu professor de canto. Ouves-me bem?');
-  $('voiceInfo').textContent = ok ? 'A falar com: ' + (T.voice ? T.voice.name + ' (' + T.voice.lang + ')' : 'voz por defeito (pt-PT)') : 'Não foi possível falar neste navegador.';
+  $('voiceInfo').textContent = ok ? 'A falar com: ' + (voice ? voice.name + ' (' + voice.lang + ')' : 'voz por defeito (pt-PT)') : 'Não foi possível falar.';
 };
-$('exStop').onclick = () => { if (running) running.stop = true; };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function runEx(key) {
-  if (!S.an) return alert('Ativa primeiro o microfone.');
-  if (running) return;
-  const r = range() || { low: 48, high: 60 }, ex = EX[key];
-  let notes = ex.build(r.low, r.high);
-  const top = Math.max(...notes.map(n => n.m)); if (top > r.high) { const sh = top - r.high; notes = notes.map(n => ({ ...n, m: Math.max(r.low, n.m - sh) })); }
-  running = { stop: false };
-  $('exSummary').classList.add('hidden'); $('exRun').classList.remove('hidden'); $('exTitle').textContent = ex.nome;
-  $('exSteps').innerHTML = notes.map((n, i) => `<div class="step" id="st${i}">${noteName(n.m)}</div>`).join('');
-  document.querySelectorAll('.exBtn').forEach(b => b.disabled = true);
-  const results = [];
-  $('exStatus').textContent = '🌬️ Inspira fundo… vamos começar.'; await speak(pick(['Vamos lá! Ouve cada nota e repete-a logo a seguir.', 'Prepara-te: respira fundo, ombros soltos, e repete cada nota que eu tocar.'], 'start')); await sleep(500);
-  for (let i = 0; i < notes.length && !running.stop; i++) {
-    const n = notes[i], el = $('st' + i); el.classList.add('cur');
-    S.target = n.m; S.free = false; $('followTarget').checked = false; $('targetSel').value = n.m;
-    $('exStatus').textContent = '🔊 Ouve: ' + noteName(n.m); await tone(n.m, Math.min(1.2, n.dur));
-    $('exStatus').textContent = '🎤 Agora canta: ' + noteName(n.m); await sleep(300);
-    const v = await captureNote(n.dur * 1000), res = scoreNote(v, n.m); results.push(res);
-    el.classList.remove('cur'); el.classList.add(res.score >= 75 ? 'good' : res.score >= 45 ? 'ok' : 'bad');
-    el.title = res.score + '%';
-    const nc = noteComment(res); $('exStatus').textContent = '🧑‍🏫 ' + nc; if (!running.stop) await speak(nc);
+/* ---------- Banco de dicas (ligadas ao que se ouve) ---------- */
+const TIPS = {
+  apoio: ['A nota treme: firma a barriga como se fosses tossir de leve e deixa o ar sair num fio contínuo.', 'Apoio! Imagina que empurras o ar a partir da cintura, não da garganta.', 'Para estabilizar, expira devagar e de forma constante — como se soprasses uma vela sem a apagar.', 'Mantém as costelas abertas enquanto cantas; é isso que segura a nota.'],
+  registo: ['Nota aguda a cair? Deixa a voz passar para a voz de cabeça: mais leve, como um "uh" de coruja.', 'Nos agudos não empurres a voz de peito. Aligeira o som e pensa que a nota sai pelo topo da cabeça.', 'Para subir, faz menos força, não mais. Experimenta um "ng" ou um sirene suave do grave ao agudo.', 'Sente a vibração a passar do peito para a cara e a cabeça à medida que sobes.'],
+  baixo: ['Estás um pouco baixo: pensa a nota por cima, como se a apanhasses a descer.', 'Levanta o palato mole — o céu da boca — como no início de um bocejo.', 'Sorri ligeiramente com os olhos; ajuda a dar brilho e a subir a afinação.', 'Mais apoio de ar costuma resolver notas baixas. Barriga firme!'],
+  alto: ['Estás acima: solta o maxilar e não empurres o ar.', 'Relaxa o pescoço e os ombros; tensão faz a nota subir.', 'Deixa a nota assentar: menos pressão, mais espaço na boca.'],
+  ataque: ['Entraste por baixo e foste à procura. Ouve a nota na cabeça antes de cantar e entra já nela.', 'Ataque suave: começa a nota com um ligeiro "h" imaginário, sem golpe de glote, mas já na altura certa.', 'Prepara a nota antes: inspira, imagina o som e só depois canta.'],
+  sustentar: ['A nota cai no fim: guarda ar para o final e mantém o apoio até ao último instante.', 'Sustenta! Pensa que a nota continua a viajar para a frente, mesmo no fim.', 'Não deixes a energia morrer no fim da nota — termina com a mesma intenção com que começaste.'],
+  vibrato: ['Estou a ouvir vibrato — bonito! Deixa-o nascer naturalmente, sem o forçar.', 'Belo vibrato. Mantém-no regular e o centro da nota no sítio.'],
+  volBaixo: ['Ouço-te pouco. Abre mais a boca, na vertical, como se tivesses um ovo entre os dentes.', 'Dá mais voz: imagina que cantas para alguém do outro lado da sala.', 'Mais som com menos esforço: dirige a voz para a "máscara", à frente da cara.'],
+  volAlto: ['Está muito forte. Canta a 70 %: a voz fica mais bonita e mais afinada.', 'Não precisas de gritar. Baixa um pouco o volume e mantém o apoio.'],
+  boca: ['Abre bem a boca: o som precisa de espaço para sair.', 'Deixa o maxilar cair, solto, como se estivesse pendurado.'],
+  vogais: ['Canta numa vogal aberta como "a" ou "ó" — ficam mais fáceis de afinar.', 'Mantém a mesma forma de vogal do início ao fim da nota.', 'Se a nota for difícil, experimenta "u" — é a vogal mais estável.'],
+  ressonancia: ['Experimenta trautear de boca fechada ("mmm") e sentir os lábios a vibrar: isso é ressonância.', 'Imagina o som a sair pelos olhos e pelo nariz — dá brilho sem esforço.'],
+  maxilar: ['Solta o maxilar e a língua: deixa a ponta da língua tocar nos dentes de baixo.', 'Massaja as bochechas e deixa a boca cair — menos tensão, mais som.'],
+  postura: ['Postura: pés à largura dos ombros, joelhos soltos, cabeça direita como se fosse puxada por um fio.', 'Ombros para baixo e para trás. O peito fica aberto e o ar entra melhor.'],
+  respiracao: ['Respira pelo nariz e sente a barriga e as costas a expandir, sem levantar os ombros.', 'Antes de cada frase, inspira em silêncio e com calma — três tempos chegam.', 'Expira o ar velho antes de inspirar de novo; dá espaço ao ar novo.'],
+  bom: ['Isso! Nota certa e estável.', 'Muito bem, estás em cima da nota.', 'Perfeito — memoriza esta sensação.', 'Assim mesmo, voz livre e afinada!'],
+  hidratacao: ['Lembrete: bebe um pouco de água — as pregas vocais gostam de estar hidratadas.', 'Já cantas há um bocado. Faz uma pausa curta e bebe água.'],
+  aquecimento: ['Antes de começar: faz uns "brrr" com os lábios a vibrar, a subir e a descer, durante 30 segundos.', 'Aquece a voz: suspira do agudo para o grave umas três vezes, bem relaxado.'],
+};
+const tipQueues = {};
+function nextTip(cat) { // roda sem repetir até esgotar a categoria
+  if (!tipQueues[cat] || !tipQueues[cat].length) { tipQueues[cat] = TIPS[cat].slice().sort(() => Math.random() - 0.5); if (tipQueues[cat][0] === S.lastTip && tipQueues[cat].length > 1) tipQueues[cat].push(tipQueues[cat].shift()); }
+  return (S.lastTip = tipQueues[cat].shift());
+}
+function showTip(cat) { $('tipText').textContent = nextTip(cat); const b = $('tipBox'); b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); }
+
+const Coach = {
+  active: false, lastAt: 0, lastCat: null, sessionStart: now(), hydr: false,
+  tick(t, tgt, contaminated) {
+    if (contaminated || t - this.lastAt < 3800) return;
+    const pts = S.trail.filter(p => t - p.t < 1200 && p.own);
+    const voiced = pts.filter(p => p.m != null);
+    let cat = null;
+    if (!this.hydr && t - this.sessionStart > 10 * 60000) { this.hydr = true; cat = 'hidratacao'; }
+    else if (voiced.length < 8) { if (S.mode === 'free' && pts.length > 30) cat = 'respiracao'; }
+    else {
+      const ref = tgt != null ? tgt : Math.round(voiced[voiced.length - 1].m);
+      const cs = voiced.map(p => { const m = p.m + 12 * Math.round((ref - p.m) / 12); return (m - ref) * 100; });
+      const mean = cs.reduce((a, b) => a + b) / cs.length, sd = Math.sqrt(cs.reduce((a, c) => a + (c - mean) ** 2, 0) / cs.length);
+      const rms = voiced.reduce((a, p) => a + p.rms, 0) / voiced.length;
+      // vibrato: oscilação regular de 4–7,5 Hz
+      let cross = 0; for (let i = 1; i < cs.length; i++) if ((cs[i - 1] - mean) * (cs[i] - mean) < 0) cross++;
+      const dur = (voiced[voiced.length - 1].t - voiced[0].t) / 1000, rate = dur > 0 ? cross / 2 / dur : 0;
+      const half = Math.floor(cs.length / 2), slope = cs.slice(half).reduce((a, b) => a + b, 0) / Math.max(1, cs.length - half) - cs.slice(0, half).reduce((a, b) => a + b, 0) / Math.max(1, half);
+      const highNote = P.range && ref >= P.range.high - 3;
+      if (rms < 0.02) cat = pick(['volBaixo', 'boca', 'ressonancia']);
+      else if (rms > 0.3) cat = 'volAlto';
+      else if (sd > 18 && sd < 70 && rate >= 4 && rate <= 7.5) cat = 'vibrato';
+      else if (sd > 35) cat = 'apoio';
+      else if (tgt != null && mean < -30) cat = highNote ? 'registo' : (slope > 30 ? 'ataque' : 'baixo');
+      else if (tgt != null && mean > 30) cat = pick(['alto', 'maxilar']);
+      else if (slope < -40) cat = highNote ? 'registo' : 'sustentar';
+      else cat = Math.random() < 0.5 ? 'bom' : pick(['postura', 'vogais', 'ressonancia', 'maxilar', 'respiracao']);
+    }
+    if (!cat || (cat === this.lastCat && cat === 'bom')) return;
+    this.lastAt = t; this.lastCat = cat; showTip(cat);
+    if (S.mode === 'free') say(describeFree(voiced, cat));
   }
-  document.querySelectorAll('.exBtn').forEach(b => b.disabled = false);
-  $('exRun').classList.add('hidden');
-  if (results.length) summary(ex.nome, results);
-  running = null;
+};
+function describeFree(voiced, cat) {
+  if (!voiced.length) return 'Estou à espera da tua voz. Respira e canta uma nota confortável.';
+  const m = voiced.reduce((a, p) => a + p.m, 0) / voiced.length, n = Math.round(m), c = Math.round((m - n) * 100);
+  return 'Estou a ouvir um ' + noteName(n) + ' (' + Math.round(midiToFreq(m)) + ' Hz)' + (Math.abs(c) <= 15 ? ', bem no centro da nota.' : ', ' + Math.abs(c) + ' cêntimos ' + (c < 0 ? 'abaixo' : 'acima') + ' do centro.');
 }
-function scoreNote(v, target) {
-  const valid = v.slice(Math.floor(v.length * 0.2)); // ignora ataque
-  if (valid.length < 10) return { m: target, voiced: false, score: 0, acc: 0, stab: 0, cents: null, sd: null };
-  const fixed = valid.map(x => x + 12 * Math.round((target - x) / 12)); // tolera erro de oitava
-  const octErr = Math.abs(valid[0] - fixed[0]) > 6;
-  const mean = fixed.reduce((a, b) => a + b) / fixed.length, cents = (mean - target) * 100;
-  const sd = Math.sqrt(fixed.reduce((a, b) => a + (b - mean) ** 2, 0) / fixed.length) * 100;
-  const acc = Math.max(0, 100 - Math.max(0, Math.abs(cents) - 10) * 1.1), stab = Math.max(0, 100 - Math.max(0, sd - 8) * 2);
-  const cov = Math.min(1, v.length / 40);
-  return { m: target, voiced: true, cents: Math.round(cents), sd: Math.round(sd), acc: Math.round(acc), stab: Math.round(stab), score: Math.round((acc * 0.6 + stab * 0.4) * cov), octErr };
+
+/* ---------- Níveis ---------- */
+const LEVELS = [
+  { nome: 'Uma nota', desc: 'Ouve uma nota e repete-a.', beat: 2.0, items: [[0], [2], [4], [5], [7], [3], [9]] },
+  { nome: 'Duas notas', desc: 'Pequenos saltos.', beat: 1.2, items: [[0, 2], [2, 0], [0, 4], [4, 0], [0, 5], [0, 7]] },
+  { nome: 'Pequenas frases', desc: 'Três a cinco notas.', beat: 0.8, items: [[0, 2, 4], [4, 2, 0], [0, 2, 4, 2, 0], [0, 4, 7], [7, 4, 0], [0, 2, 4, 5, 7]] },
+  { nome: 'Melodias', desc: 'Canções tradicionais.', beat: 0.55, items: [
+    { t: 'Brilha, brilha, estrelinha', n: [0, 0, 7, 7, 9, 9, 7], d: [1, 1, 1, 1, 1, 1, 2] },
+    { t: 'Brilha, brilha (2.ª parte)', n: [5, 5, 4, 4, 2, 2, 0], d: [1, 1, 1, 1, 1, 1, 2] },
+    { t: 'Frei Martinho', n: [0, 2, 4, 0, 0, 2, 4, 0], d: [1, 1, 1, 1, 1, 1, 1, 1] },
+    { t: 'Frei Martinho (2.ª parte)', n: [4, 5, 7, 4, 5, 7], d: [1, 1, 2, 1, 1, 2] },
+    { t: 'Parabéns a você', n: [-5, -5, -3, -5, 0, -1], d: [0.75, 0.25, 1, 1, 1, 2] },
+  ] },
+];
+function buildItem(li, ii) {
+  const L = LEVELS[li], it = L.items[ii];
+  const rel = Array.isArray(it) ? it : it.n, dur = Array.isArray(it) ? rel.map(() => 1) : it.d;
+  const r = P.range || { low: 48, high: 60 };
+  const lo = Math.min(...rel), hi = Math.max(...rel), room = (r.high - r.low) - (hi - lo);
+  const base = r.low - lo + Math.max(0, Math.min(room, Math.round(room * 0.35)));
+  let t = 0; const notes = rel.map((x, i) => { const n = { m: base + x, t0: t, t1: t + dur[i] * L.beat }; t += dur[i] * L.beat; return n; });
+  return { notes, title: it.t || (L.nome + ' · ' + (ii + 1) + '/' + L.items.length), total: t };
 }
-function summary(nome, rs) {
-  const avg = k => Math.round(rs.reduce((a, r) => a + r[k], 0) / rs.length);
-  const total = avg('score'), acc = avg('acc'), stab = avg('stab'), voiced = rs.filter(r => r.voiced);
-  const tips = [];
-  if (voiced.length < rs.length) tips.push('Algumas notas não foram detetadas: canta mais perto do microfone e começa logo após a nota guia.');
-  const meanC = voiced.length ? voiced.reduce((a, r) => a + r.cents, 0) / voiced.length : 0;
-  if (meanC < -20) tips.push('Tens tendência a ficar abaixo da nota — pensa "para cima" e mantém o palato mole elevado.');
-  if (meanC > 20) tips.push('Tens tendência a ficar acima da nota — relaxa a garganta e não empurres o ar.');
-  if (stab < 70) tips.push('Trabalha a estabilidade: notas longas em "sss" ou "vvv" ajudam a controlar o fluxo de ar.');
-  const hi = voiced.filter(r => r.m >= Math.max(...rs.map(x => x.m)) - 2);
-  if (hi.length && hi.reduce((a, r) => a + r.score, 0) / hi.length < total - 15) tips.push('As notas agudas custam mais — aquece mais tempo e não forces a extensão.');
-  if (rs.some(r => r.octErr)) tips.push('Cantaste algumas notas numa oitava diferente (contou na mesma, mas tenta a oitava da guia).');
-  if (!tips.length) tips.push('Excelente trabalho! Experimenta um exercício mais exigente.');
-  $('exSummary').innerHTML = `<h3>Resumo: ${nome}</h3><div class="score">${total}%</div><p>Afinação ${acc}% · Estabilidade ${stab}%</p>
-  <table><tr><th>Nota</th><th>Desvio</th><th>Oscilação</th><th>Pontos</th></tr>${rs.map(r => `<tr><td>${noteName(r.m)}</td><td>${r.voiced ? (r.cents > 0 ? '+' : '') + r.cents + ' ¢' : '—'}</td><td>${r.voiced ? r.sd + ' ¢' : '—'}</td><td>${r.score}%</td></tr>`).join('')}</table>
-  <ul>${tips.map(t => '<li>' + t + '</li>').join('')}</ul>`;
-  $('exSummary').classList.remove('hidden');
-  const h = store.get('canto.hist', []);
-  const prev = (h.find(x => x.nome === nome) || {}).total;
-  const talk = exerciseTalk(total, acc, stab, tips, prev); $('exSummary').insertAdjacentHTML('afterbegin', '<p class="teacherSay">🧑‍🏫 ' + talk + '</p>'); speak(talk); h.unshift({ d: Date.now(), nome, total, acc, stab }); store.set('canto.hist', h.slice(0, 100));
+const starKey = (li, ii) => li + ':' + ii;
+function renderHome() {
+  $('streak').textContent = '🔥 ' + (P.streak.n || 0); $('xp').textContent = '⭐ ' + P.xp;
+  $('levelMap').innerHTML = LEVELS.map((L, li) => {
+    const got = L.items.reduce((a, _, ii) => a + (P.stars[starKey(li, ii)] || 0), 0), max = L.items.length * 3;
+    const locked = li > P.level; const cur = li === P.level;
+    return `<button class="lvl ${locked ? 'locked' : ''} ${cur ? 'cur' : ''}" data-l="${li}" ${locked ? 'disabled' : ''}><span><b>${locked ? '🔒' : cur ? '▶' : '✓'} Nível ${li + 1} · ${L.nome}</b><small>${L.desc}</small><div class="prog"><i style="width:${got / max * 100}%"></i></div></span><span class="st">${got}/${max} ⭐</span></button>`;
+  }).join('');
+  document.querySelectorAll('.lvl').forEach(b => b.onclick = () => { const li = +b.dataset.l; if (li !== P.level) { P.level = li; P.item = 0; save(); } go('lesson', true); });
+  $('startBtn').textContent = P.range ? '▶ Continuar: Nível ' + (P.level + 1) + ' · ' + LEVELS[P.level].nome : '▶ Começar a primeira aula';
 }
-function renderHist() {
-  const h = store.get('canto.hist', []);
-  $('histList').innerHTML = h.length ? `<table><tr><th>Data</th><th>Exercício</th><th>Total</th><th>Afinação</th><th>Estab.</th></tr>${h.map(x => `<tr><td>${new Date(x.d).toLocaleString('pt-PT')}</td><td>${x.nome}</td><td>${x.total}%</td><td>${x.acc}%</td><td>${x.stab}%</td></tr>`).join('')}</table>` : '<p class="sub">Ainda não há sessões.</p>';
+
+/* ---------- Ecrãs ---------- */
+function show(id) { document.querySelectorAll('.scr').forEach(s => s.classList.toggle('active', s.id === id)); window.scrollTo(0, 0); }
+let flow = 0; // incrementa para cancelar fluxos antigos
+function stageButtons(btns) {
+  const box = $('stageBtns'); box.innerHTML = '';
+  btns.forEach(([label, fn, primary]) => { const b = document.createElement('button'); b.className = 'big' + (primary ? ' primary' : ''); b.textContent = label; b.onclick = fn; box.appendChild(b); });
 }
-$('clearHist').onclick = () => { if (confirm('Apagar todo o histórico?')) { store.set('canto.hist', []); renderHist(); } };
+function setPhase(txt) { $('phaseBadge').textContent = txt; }
+function setStars(n) { $('stars').textContent = n == null ? '' : '★★★'.slice(0, n) + '☆☆☆'.slice(0, 3 - n); }
+
+async function go(mode, gesture) {
+  if (gesture) unlockSpeech(pick(['Olá, vamos cantar!', 'Vamos a isso!', 'Bora cantar!'].slice(0, 2)));
+  const ok = await startMic(); if (!ok) { show('scrHome'); return; }
+  if (!P.tutDone && mode !== 'tutorial') { await runTutorial(); }
+  if (!P.range && mode === 'lesson') mode = 'range';
+  const my = ++flow; S.mode = mode; S.lane = null; S.rec = null; setStars(null);
+  show('scrStage');
+  if (mode === 'range') return rangeTest(my);
+  if (mode === 'free') return freeMode(my);
+  return lesson(my);
+}
+$('startBtn').onclick = () => go('lesson', true);
+$('freeBtn').onclick = () => go('free', true);
+$('rangeBtn').onclick = () => go('range', true);
+$('tutBtn').onclick = () => { unlockSpeech('Vou explicar-te o ecrã.'); runTutorial(); };
+$('backBtn').onclick = () => { flow++; S.lane = null; S.rec = null; Coach.active = false; if (canSpeak) speechSynthesis.cancel(); S.speaking = false; renderHome(); show('scrHome'); };
+
+/* Tutorial */
+const TUT = [
+  ['👋', 'Bem-vindo ao Afinaro', 'Sou o teu professor. Vamos treinar a afinação com um jogo simples: eu canto, tu repetes.'],
+  ['🟪', 'Os blocos são as minhas notas', 'Na pista, cada bloco colorido é uma nota. Quanto mais acima, mais aguda. Os blocos andam da direita para a esquerda.'],
+  ['⚪', 'A bolinha é a tua voz', 'Quando cantas, a bolinha sobe e desce contigo na linha vertical. O teu objetivo é mantê-la dentro do bloco quando ele passa.'],
+  ['🟢', 'As cores dizem-te como estás', 'Verde: estás certo. Amarelo: quase lá. Vermelho: estás longe. Por baixo vês a nota e quantos cêntimos te faltam.'],
+  ['🔁', 'Ouve, espera pelo "Agora tu!" e repete', 'Primeiro ouves a nota. Depois há uma contagem 3, 2, 1 e cantas. No fim explico-te o que aconteceu e decidimos se repetes ou avanças.'],
+  ['💡', 'Dicas enquanto cantas', 'Enquanto cantas, aparecem dicas na caixa amarela ligadas ao que estou a ouvir. Usa auscultadores se puderes.'],
+];
+function runTutorial() {
+  return new Promise(res => {
+    let i = 0; const o = $('tut'); o.classList.remove('hidden');
+    const draw = () => { const [a, t, x] = TUT[i]; $('tutArt').textContent = a; $('tutTitle').textContent = t; $('tutText').textContent = x; $('tutNext').textContent = i === TUT.length - 1 ? 'Vamos cantar!' : 'Seguinte'; $('tutDots').innerHTML = TUT.map((_, k) => '<i class="' + (k === i ? 'on' : '') + '"></i>').join(''); };
+    const end = () => { o.classList.add('hidden'); P.tutDone = true; save(); res(); };
+    $('tutNext').onclick = () => { if (++i >= TUT.length) end(); else draw(); };
+    $('tutSkip').onclick = end; draw();
+  });
+}
+
+/* Teste de extensão */
+async function rangeTest(my) {
+  Coach.active = false;
+  $('stageTitle').textContent = 'Teste de extensão'; $('stageSub').textContent = 'Vamos descobrir as notas confortáveis para a tua voz.';
+  setPhase('📏 Extensão'); $('tipText').textContent = 'Canta num "a" ou "ó" confortável, sem forçar. Não é preciso chegar ao limite.';
+  const r = { low: null, high: null };
+  const capture = async (label) => {
+    stageButtons([]);
+    for (let k = 3; k > 0; k--) { if (my !== flow) return null; setPhase('🎤 ' + label + ' em ' + k); await sleep(700); }
+    setPhase('🎤 Segura a nota…'); S.rec = []; await sleep(2500); const v = S.rec.filter(p => p.m != null).map(p => p.m); S.rec = null;
+    if (v.length < 25) return null; v.sort((a, b) => a - b); return Math.round(v[v.length >> 1]);
+  };
+  const step = (which) => new Promise(res => {
+    const label = which === 'low' ? 'Grave' : 'Aguda';
+    speak(which === 'low' ? 'Canta a nota mais grave que consegues cantar com conforto, e segura-a. Carrega em gravar quando estiveres pronto.' : 'Agora a nota mais aguda confortável, sem gritar. Pode ser em voz de cabeça.');
+    const ask = () => stageButtons([['🎤 Gravar nota ' + label.toLowerCase(), async () => { const m = await capture(label); if (my !== flow) return; if (m == null) { say('Não ouvi uma nota estável. Chega-te ao microfone e tenta outra vez.'); ask(); } else { r[which] = m; say('Ouvi ' + noteName(m) + '. ' + (which === 'low' ? 'Ótimo!' : 'Muito bem!')); res(); } }, true], ['Não sei — escolher tipo de voz', presets]]);
+    ask();
+  });
+  const presets = () => stageButtons([['Voz grave (Lá2–Ré4)', () => done(45, 62)], ['Voz média (Dó3–Sol4)', () => done(48, 67)], ['Voz aguda (Sol3–Ré5)', () => done(55, 74)]]);
+  const done = async (lo, hi) => {
+    if (hi - lo < 7) hi = lo + 7;
+    P.range = { low: lo, high: hi }; save(); setPhase('✅ ' + noteName(lo) + ' – ' + noteName(hi));
+    await speak('A tua extensão confortável vai de ' + noteName(lo) + ' a ' + noteName(hi) + '. Vou pôr todos os exercícios nessa zona. ' + nextTip('aquecimento'));
+    if (my === flow) { flow++; go('lesson'); }
+  };
+  await step('low'); if (my !== flow) return;
+  await step('high'); if (my !== flow) return;
+  let lo = Math.min(r.low, r.high), hi = Math.max(r.low, r.high);
+  done(lo + 1, hi - 1); // margem de conforto
+}
+
+/* Prática livre */
+function freeMode(my) {
+  Coach.active = true; Coach.lastAt = 0;
+  $('stageTitle').textContent = 'Prática livre'; $('stageSub').textContent = 'Canta o que quiseres — mostro-te a nota e dou-te dicas.';
+  setPhase('🎧 A ouvir'); say('Canta uma nota longa e confortável. Vou dizendo o que estou a ouvir.');
+  stageButtons([['🎵 Tocar Lá3 de referência', () => { playNotes([{ m: 57, t0: 0, t1: 1.5 }], now() + 50); }]]);
+}
+
+/* Aula: ouve e repete */
+let tries = 0;
+async function lesson(my) {
+  if (P.level >= LEVELS.length) { P.level = LEVELS.length - 1; P.item = 0; }
+  if (P.item >= LEVELS[P.level].items.length) P.item = 0;
+  const li = P.level, ii = P.item, item = buildItem(li, ii);
+  $('stageTitle').textContent = 'Nível ' + (li + 1) + ' · ' + LEVELS[li].nome; $('stageSub').textContent = item.title + ' · ' + item.notes.map(n => noteName(n.m)).join(' – ');
+  setStars(P.stars[starKey(li, ii)] ?? null); stageButtons([]);
+  if (!S.warmed) { S.warmed = true; await speak(pick(['Antes de começarmos: ', 'Uma coisa rápida: ']) + nextTip(pick(['aquecimento', 'postura', 'respiracao']))); if (my !== flow) return; }
+  // 1) Ouve
+  S.lane = { phase: 'listen', notes: item.notes.map(n => ({ ...n })), start: now() + 1200 };
+  setPhase('👂 Ouve'); say(tries ? 'Ouve outra vez com atenção.' : item.notes.length === 1 ? 'Ouve esta nota.' : 'Ouve esta frase.');
+  playNotes(item.notes, S.lane.start);
+  await sleep(1200 + item.total * 1000 + 300); if (my !== flow) return;
+  // 2) Contagem
+  const cd = $('countdown'); cd.classList.remove('hidden');
+  for (const k of ['3', '2', '1', 'Agora tu!']) { cd.textContent = k; await sleep(k === 'Agora tu!' ? 450 : 550); if (my !== flow) { cd.classList.add('hidden'); return; } }
+  cd.classList.add('hidden');
+  // 3) Canta — os blocos voltam a passar e tu cantas por cima
+  const lead = 600;
+  S.lane = { phase: 'sing', notes: item.notes.map(n => ({ ...n })), start: now() + lead };
+  setPhase('🎤 Canta!'); say('Canta quando o bloco chegar à linha.'); Coach.active = true; Coach.lastAt = now() - 2500;
+  S.rec = [];
+  await sleep(lead + item.total * 1000 + 350); if (my !== flow) return;
+  Coach.active = false;
+  const rec = S.rec; S.rec = null;
+  // 4) Análise
+  const results = S.lane.notes.map(n => {
+    const a = S.lane.start + n.t0 * 1000 + 120, b = S.lane.start + n.t1 * 1000 - 40;
+    const r = analyseNote(rec.filter(p => p.t >= a && p.t < b), n.m); n.res = r; return r;
+  });
+  const score = Math.round(results.reduce((x, r) => x + r.score, 0) / results.length), stars = starsFor(score);
+  setStars(stars); setPhase(stars >= 2 ? '🎉 ' + score + '%' : '🔁 ' + score + '%');
+  // explicação concreta
+  let text;
+  if (results.length === 1) text = 'Na nota ' + noteName(results[0].target) + ', ' + explainNote(results[0]) + '.';
+  else {
+    const worst = results.reduce((w, r, i) => r.score < results[w].score ? i : w, 0), good = results.filter(r => r.score >= 75).length;
+    text = good === results.length ? 'Todas as notas certas — ' + explainNote(results[worst]).replace(/^começaste/, 'começaste') + ' até na mais difícil.' : 'Acertaste ' + good + ' de ' + results.length + ' notas. Na ' + (worst + 1) + '.ª nota, ' + noteName(results[worst].target) + ', ' + explainNote(results[worst]) + '.';
+  }
+  const w = results.reduce((a, r) => r.score < a.score ? r : a, results[0]);
+  let fix = '';
+  if (!w.voiced) fix = ' Entra logo a seguir à contagem e canta um pouco mais forte.';
+  else if (w.start < -40 && Math.abs(w.end) < 30) fix = ' ' + nextTip('ataque');
+  else if (w.mean < -30) fix = ' ' + nextTip(P.range && w.target >= P.range.high - 3 ? 'registo' : 'baixo');
+  else if (w.mean > 30) fix = ' ' + nextTip('alto');
+  else if (w.sd > 35) fix = ' ' + nextTip('apoio');
+  else if (w.end - w.start < -40) fix = ' ' + nextTip('sustentar');
+  // progresso
+  const k = starKey(li, ii), prevStars = P.stars[k] || 0;
+  if (stars > prevStars) { P.xp += stars - prevStars; P.stars[k] = stars; }
+  const today = new Date().toISOString().slice(0, 10), yest = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  if (P.streak.d !== today) { P.streak = { d: today, n: P.streak.d === yest ? P.streak.n + 1 : 1 }; }
+  P.hist.unshift({ d: Date.now(), li, ii, score, stars }); P.hist = P.hist.slice(0, 200);
+  let verdict, advance;
+  if (stars >= 2) { advance = true; tries = 0; verdict = pick(['Muito bem! Vamos avançar.', 'Excelente, passamos à seguinte!', 'Boa! Estás a evoluir. Próximo exercício.']); }
+  else if (++tries >= 3) { advance = true; tries = 0; verdict = 'Vamos seguir em frente e voltamos a este mais tarde. Não desanimes!'; }
+  else { advance = false; verdict = pick(['Vamos repetir — vais ver que sai melhor.', 'Mais uma vez, com calma.', 'Repete comigo, estás quase.']); }
+  if (advance) { P.item++; if (P.item >= LEVELS[li].items.length) { P.item = 0; if (P.level < LEVELS.length - 1) { P.level++; verdict += ' Desbloqueaste o nível ' + (P.level + 1) + ': ' + LEVELS[P.level].nome + '!'; } } }
+  save(); $('streak').textContent = '🔥 ' + P.streak.n; $('xp').textContent = '⭐ ' + P.xp;
+  S.lastResult = { score, stars, results, text };
+  stageButtons([[advance ? 'Continuar ▶' : '🔁 Tentar outra vez', () => { if (my === flow) { flow++; S.mode = 'lesson'; lesson(flow); } }, true], ['👂 Ouvir outra vez', () => { if (my === flow) { if (advance) { if (P.item === 0 && P.level > li) P.level = li; P.item = ii; } flow++; lesson(flow); } }]]);
+  await speak(text + fix + ' ' + verdict);
+}
+
+syncSound(); renderHome();
+window.__af = { S, P, LEVELS, buildItem };
 })();
