@@ -3,76 +3,141 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#170d2b">
-<title>Afinaro · Ouve e repete</title>
+<meta name="theme-color" content="#071433">
+<title>Afinaro · Aprende a cantar afinado</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<link rel="icon" type="image/png" href="favicon.png">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Afinaro">
 </head>
 <body>
-<header class="top">
-  <div class="brand"><img src="logo.png" alt="">Afinaro</div>
-  <div class="stats"><span id="streak" title="Dias seguidos">🔥 0</span><span id="xp" title="Estrelas">⭐ 0</span><button id="soundBtn" class="icon" title="Voz do professor">🔊</button></div>
+<div class="bgGlow"></div>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <linearGradient id="gBrand" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00C9A7"/><stop offset="1" stop-color="#2D6BFF"/></linearGradient>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-path" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 2s5 4.6 5 10a5 5 0 0 1-10 0c0-2.2 1.3-3.9 1.3-3.9S9 11 11 11c0-4 1-9 1-9z" fill="currentColor"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2.8 2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z" fill="currentColor"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="currentColor"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M3 16.5 16.5 3 21 7.5 7.5 21zM7 12.5l2 2M10 9.5l2 2M13 6.5l2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+</defs></svg>
+
+<header class="top" id="topBar">
+  <div class="brand"><img src="logo.png" alt="Afinaro" width="34" height="34"><span>Afinaro</span></div>
+  <div class="stats">
+    <span class="pill flame"><svg><use href="#i-flame"/></svg><b id="streak">0</b></span>
+    <span class="pill star"><svg><use href="#i-star"/></svg><b id="xp">0</b></span>
+    <button id="soundBtn" class="iconBtn" aria-label="Voz do professor"><svg><use href="#i-sound"/></svg></button>
+  </div>
 </header>
 
 <main>
   <!-- INÍCIO -->
   <section id="scrHome" class="scr active">
-    <div class="hero card">
-      <img class="heroLogo" src="logo.png" alt="Afinaro">
-      <h1>Ouve e repete</h1>
-      <p>Eu canto uma nota ou uma pequena frase, tu repetes. Vês a tua voz em tempo real e eu explico-te o que aconteceu.</p>
-      <button id="startBtn" class="big primary">▶ Começar a aula</button>
-      <p id="micErr" class="err"></p>
+    <p class="hello" id="hello">Olá! 👋</p>
+    <h1 class="title">Pronto para<br><span class="grad">cantar afinado?</span></h1>
+    <div class="glass continue">
+      <div class="ringWrap"><svg class="ring" viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" class="ringBg"/><circle cx="60" cy="60" r="50" class="ringFg" id="homeRing"/></svg><div class="ringTxt"><b id="homePct">0%</b><small>nível</small></div></div>
+      <div class="contInfo"><small id="contLevel">Nível 1</small><h3 id="contName">Uma nota</h3><p id="contDesc" class="sub">Ouve uma nota e repete-a.</p></div>
     </div>
-    <div class="card">
-      <h2>O teu caminho</h2>
-      <div id="levelMap" class="levels"></div>
+    <button id="startBtn" class="cta"><svg><use href="#i-play"/></svg><span>Começar a aula</span></button>
+    <p id="micErr" class="err"></p>
+    <div class="grid2">
+      <div class="glass mini"><small>Hoje</small><b id="todayCount">0</b><span class="sub">tentativas</span></div>
+      <div class="glass mini"><small>A tua voz</small><b id="rangeTxt">—</b><span class="sub">extensão</span></div>
     </div>
-    <div class="row wrap">
-      <button id="freeBtn" class="big">🎧 Prática livre</button>
-      <button id="rangeBtn" class="big">📏 Refazer teste de extensão</button>
-      <button id="tutBtn" class="big">❓ Como funciona</button>
-    </div>
-    <div class="card small"><label class="chk"><input type="checkbox" id="speakToggle" checked> 🔊 Professor fala em voz alta</label> <button id="testVoice">Testar voz</button><div id="voiceInfo" class="sub"></div></div>
+    <div class="glass tipOfDay"><span class="badge">Dica do dia</span><p id="dayTip"></p></div>
   </section>
 
-  <!-- PALCO (aula, extensão, prática livre) -->
-  <section id="scrStage" class="scr">
+  <!-- AULAS -->
+  <section id="scrPath" class="scr">
+    <h1 class="title sm">O teu caminho</h1>
+    <p class="sub">Cada círculo é um exercício. Ganha 2 estrelas para avançar.</p>
+    <div id="levelMap" class="path"></div>
+  </section>
+
+  <!-- PRÁTICA -->
+  <section id="scrPractice" class="scr">
+    <h1 class="title sm">Prática</h1>
+    <button id="freeBtn" class="glass tile"><span class="tIcon"><svg><use href="#i-mic"/></svg></span><span><b>Prática livre</b><small>Afinador com dicas ao vivo enquanto cantas</small></span></button>
+    <button id="rangeBtn" class="glass tile"><span class="tIcon"><svg><use href="#i-ruler"/></svg></span><span><b>Teste de extensão</b><small>Descobre as notas confortáveis da tua voz</small></span></button>
+    <button id="tutBtn" class="glass tile"><span class="tIcon"><svg><use href="#i-help"/></svg></span><span><b>Como funciona</b><small>Revê o tutorial do ecrã</small></span></button>
+    <div class="glass setting">
+      <label class="switch"><input type="checkbox" id="speakToggle" checked><i></i><span>Professor fala em voz alta</span></label>
+      <button id="testVoice" class="ghost">Testar voz</button>
+      <div id="voiceInfo" class="sub"></div>
+    </div>
+  </section>
+
+  <!-- PROGRESSO -->
+  <section id="scrProgress" class="scr">
+    <h1 class="title sm">O teu progresso</h1>
+    <div class="grid3">
+      <div class="glass mini"><small>Sequência</small><b id="pStreak">0</b><span class="sub">dias</span></div>
+      <div class="glass mini"><small>Estrelas</small><b id="pStars">0</b><span class="sub">ganhas</span></div>
+      <div class="glass mini"><small>Média</small><b id="pAvg">—</b><span class="sub">últimas 10</span></div>
+    </div>
+    <div class="glass"><h3>Afinação ao longo do tempo</h3><canvas id="chart" class="chart"></canvas><p id="chartEmpty" class="sub">Ainda sem tentativas — faz a primeira aula!</p></div>
+    <div class="glass"><h3>Por nível</h3><div id="levelBars"></div></div>
+  </section>
+
+  <!-- PALCO -->
+  <section id="scrStage" class="scr stage">
     <div class="stageHead">
-      <button id="backBtn" class="icon">←</button>
-      <div><div id="stageTitle" class="stageTitle">Aula</div><div id="stageSub" class="sub"></div></div>
+      <button id="backBtn" class="iconBtn" aria-label="Voltar"><svg><use href="#i-back"/></svg></button>
+      <div class="stTitles"><div id="stageTitle" class="stageTitle">Aula</div><div id="stageSub" class="sub"></div></div>
       <div id="stars" class="starsBox"></div>
     </div>
-    <div class="laneWrap">
+    <div class="laneWrap glass">
       <canvas id="lane"></canvas>
       <div id="phaseBadge" class="phase">—</div>
       <div id="countdown" class="countdown hidden">3</div>
     </div>
-    <div class="liveRow">
-      <div class="liveNote"><div id="liveNote" class="ln">—</div><div id="liveCents" class="sub">a ouvir…</div></div>
-      <div class="meter"><div class="mtrack"><div id="needle"></div></div><div class="scale"><span>baixo</span><span>certo</span><span>alto</span></div></div>
-      <div class="vol"><div id="volBar"></div></div>
+    <div class="tunerRow">
+      <div class="gauge">
+        <svg viewBox="0 0 200 118">
+          <defs><linearGradient id="gArc" x1="0" x2="1"><stop offset="0" stop-color="#ff5f7e"/><stop offset=".32" stop-color="#ffc94a"/><stop offset=".5" stop-color="#4ade80"/><stop offset=".68" stop-color="#ffc94a"/><stop offset="1" stop-color="#ff5f7e"/></linearGradient></defs>
+          <path d="M20 105 A80 80 0 0 1 180 105" fill="none" stroke="#ffffff14" stroke-width="16" stroke-linecap="round"/>
+          <path d="M20 105 A80 80 0 0 1 180 105" fill="none" stroke="url(#gArc)" stroke-width="10" stroke-linecap="round" opacity=".9"/>
+          <g id="needle" transform="rotate(0 100 105)"><line x1="100" y1="105" x2="100" y2="38" stroke="#fff" stroke-width="4" stroke-linecap="round"/><circle cx="100" cy="105" r="8" fill="#fff"/></g>
+          <circle id="gaugeGlow" cx="100" cy="30" r="0" fill="#4ade80" opacity=".0"/>
+        </svg>
+        <div class="gaugeTxt"><div id="liveNote" class="ln">—</div><div id="liveCents" class="sub">a ouvir…</div></div>
+      </div>
+      <div class="volWrap"><span class="sub">Volume</span><div class="vol"><div id="volBar"></div></div></div>
     </div>
-    <div id="tipBox" class="tipBox"><span class="tipIcon">💡</span><span id="tipText">Dica: senta-te ou fica de pé com as costas direitas e os ombros soltos.</span></div>
-    <div id="teacher" class="teacher">🧑‍🏫 <span id="teacherText">Olá!</span></div>
-    <div class="row wrap center" id="stageBtns">
-      <button id="replayBtn" class="big">🔁 Ouvir outra vez</button>
-      <button id="nextBtn" class="big primary hidden">Continuar ▶</button>
-    </div>
+    <div id="tipBox" class="tipBox"><span class="tipIcon">💡</span><span id="tipText">Fica de pé ou sentado com as costas direitas e os ombros soltos.</span></div>
+    <div id="teacher" class="teacher"><span class="av">🧑‍🏫</span><span id="teacherText">Olá!</span></div>
+    <div class="stageBtns" id="stageBtns"></div>
   </section>
 </main>
 
-<!-- TUTORIAL -->
+<nav class="tabbar" id="tabbar">
+  <button class="tab active" data-scr="scrHome"><svg><use href="#i-home"/></svg><span>Início</span></button>
+  <button class="tab" data-scr="scrPath"><svg><use href="#i-path"/></svg><span>Aulas</span></button>
+  <button class="tab" data-scr="scrPractice"><svg><use href="#i-mic"/></svg><span>Prática</span></button>
+  <button class="tab" data-scr="scrProgress"><svg><use href="#i-chart"/></svg><span>Progresso</span></button>
+</nav>
+
+<canvas id="fx" class="fx"></canvas>
+
 <div id="tut" class="overlay hidden">
-  <div class="tutCard card">
+  <div class="tutCard glass">
     <div id="tutArt" class="tutArt"></div>
     <h2 id="tutTitle"></h2>
     <p id="tutText"></p>
-    <div class="row center"><button id="tutSkip">Saltar</button><button id="tutNext" class="primary big">Seguinte</button></div>
+    <div class="row center"><button id="tutSkip" class="ghost">Saltar</button><button id="tutNext" class="cta small">Seguinte</button></div>
     <div id="tutDots" class="dots"></div>
   </div>
 </div>
