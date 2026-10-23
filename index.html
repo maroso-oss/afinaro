@@ -3,14 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#071433">
+<meta name="theme-color" content="#050d24">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Afinaro · Aprende a cantar afinado</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
-<link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
-<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.v4.css?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=4">
+<link rel="manifest" href="manifest.webmanifest?v=4">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Afinaro">
@@ -34,7 +37,7 @@
 </defs></svg>
 
 <header class="top" id="topBar">
-  <div class="brand"><img src="logo.png" alt="Afinaro" width="34" height="34"><span>Afinaro</span></div>
+  <div class="brand"><img src="logo.png?v=4" alt="Afinaro" width="34" height="34"><span>Afinaro</span></div>
   <div class="stats">
     <span class="pill flame"><svg><use href="#i-flame"/></svg><b id="streak">0</b></span>
     <span class="pill star"><svg><use href="#i-star"/></svg><b id="xp">0</b></span>
@@ -141,6 +144,7 @@
     <div id="tutDots" class="dots"></div>
   </div>
 </div>
-<script src="app.js"></script>
+<script src="app.v4.js?v=4"></script>
+<script>if("serviceWorker" in navigator)navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister())).catch(()=>{});</script>
 </body>
 </html>
